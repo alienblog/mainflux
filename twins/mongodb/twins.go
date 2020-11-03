@@ -18,7 +18,8 @@ const (
 )
 
 type twinRepository struct {
-	db *mongo.Database
+	db               *mongo.Database
+	subtopicWildcard string
 }
 
 var _ twins.TwinRepository = (*twinRepository)(nil)
@@ -51,8 +52,8 @@ func (tr *twinRepository) Update(ctx context.Context, tw twins.Twin) error {
 
 	coll := tr.db.Collection(twinsCollection)
 
-	filter := bson.D{{"id", tw.ID}}
-	update := bson.D{{"$set", tw}}
+	filter := bson.M{"id": tw.ID}
+	update := bson.M{"$set": tw}
 	res, err := coll.UpdateOne(context.Background(), filter, update)
 	if err != nil {
 		return err
@@ -65,22 +66,11 @@ func (tr *twinRepository) Update(ctx context.Context, tw twins.Twin) error {
 	return nil
 }
 
-func (tr *twinRepository) RetrieveByID(_ context.Context, id string) (twins.Twin, error) {
+func (tr *twinRepository) RetrieveByID(_ context.Context, twinID string) (twins.Twin, error) {
 	coll := tr.db.Collection(twinsCollection)
 	var tw twins.Twin
 
-	filter := bson.D{{"id", id}}
-	if err := coll.FindOne(context.Background(), filter).Decode(&tw); err != nil {
-		return tw, twins.ErrNotFound
-	}
-
-	return tw, nil
-}
-
-func (tr *twinRepository) RetrieveByThing(ctx context.Context, thingid string) (twins.Twin, error) {
-	coll := tr.db.Collection(twinsCollection)
-	tw := twins.Twin{}
-	filter := bson.D{{"thingid", thingid}}
+	filter := bson.M{"id": twinID}
 	if err := coll.FindOne(context.Background(), filter).Decode(&tw); err != nil {
 		return tw, twins.ErrNotFound
 	}
@@ -103,8 +93,11 @@ func (tr *twinRepository) RetrieveByAttribute(ctx context.Context, channel, subt
 	}
 	match := bson.M{
 		"$match": bson.M{
-			"definition.channel":  channel,
-			"definition.subtopic": subtopic,
+			"definition.channel": channel,
+			"$or": []interface{}{
+				bson.M{"definition.subtopic": subtopic},
+				bson.M{"definition.subtopic": twins.SubtopicWildcard},
+			},
 		},
 	}
 	prj2 := bson.M{
@@ -139,40 +132,40 @@ func (tr *twinRepository) RetrieveByAttribute(ctx context.Context, channel, subt
 	return ids, nil
 }
 
-func (tr *twinRepository) RetrieveAll(ctx context.Context, owner string, offset uint64, limit uint64, name string, metadata twins.Metadata) (twins.TwinsPage, error) {
+func (tr *twinRepository) RetrieveAll(ctx context.Context, owner string, offset uint64, limit uint64, name string, metadata twins.Metadata) (twins.Page, error) {
 	coll := tr.db.Collection(twinsCollection)
 
 	findOptions := options.Find()
 	findOptions.SetSkip(int64(offset))
 	findOptions.SetLimit(int64(limit))
 
-	filter := bson.D{}
+	filter := bson.M{}
 
 	if owner != "" {
-		filter = append(filter, bson.E{"owner", owner})
+		filter["owner"] = owner
 	}
 	if name != "" {
-		filter = append(filter, bson.E{"name", name})
+		filter["name"] = name
 	}
 	if len(metadata) > 0 {
-		filter = append(filter, bson.E{"metadata", metadata})
+		filter["metadata"] = metadata
 	}
 	cur, err := coll.Find(ctx, filter, findOptions)
 	if err != nil {
-		return twins.TwinsPage{}, err
+		return twins.Page{}, err
 	}
 
 	results, err := decodeTwins(ctx, cur)
 	if err != nil {
-		return twins.TwinsPage{}, err
+		return twins.Page{}, err
 	}
 
 	total, err := coll.CountDocuments(ctx, filter)
 	if err != nil {
-		return twins.TwinsPage{}, err
+		return twins.Page{}, err
 	}
 
-	return twins.TwinsPage{
+	return twins.Page{
 		Twins: results,
 		PageMetadata: twins.PageMetadata{
 			Total:  uint64(total),
@@ -182,43 +175,10 @@ func (tr *twinRepository) RetrieveAll(ctx context.Context, owner string, offset 
 	}, nil
 }
 
-func (tr *twinRepository) RetrieveAllByThing(ctx context.Context, thingid string, offset uint64, limit uint64) (twins.TwinsPage, error) {
+func (tr *twinRepository) Remove(ctx context.Context, twinID string) error {
 	coll := tr.db.Collection(twinsCollection)
 
-	findOptions := options.Find()
-	findOptions.SetSkip(int64(offset))
-	findOptions.SetLimit(int64(limit))
-
-	filter := bson.D{{"thingid", thingid}}
-	cur, err := coll.Find(ctx, filter, findOptions)
-	if err != nil {
-		return twins.TwinsPage{}, err
-	}
-
-	results, err := decodeTwins(ctx, cur)
-	if err != nil {
-		return twins.TwinsPage{}, err
-	}
-
-	total, err := coll.CountDocuments(ctx, filter)
-	if err != nil {
-		return twins.TwinsPage{}, err
-	}
-
-	return twins.TwinsPage{
-		Twins: results,
-		PageMetadata: twins.PageMetadata{
-			Total:  uint64(total),
-			Offset: offset,
-			Limit:  limit,
-		},
-	}, nil
-}
-
-func (tr *twinRepository) Remove(ctx context.Context, id string) error {
-	coll := tr.db.Collection(twinsCollection)
-
-	filter := bson.D{{"id", id}}
+	filter := bson.M{"id": twinID}
 	res, err := coll.DeleteOne(context.Background(), filter)
 	if err != nil {
 		return err

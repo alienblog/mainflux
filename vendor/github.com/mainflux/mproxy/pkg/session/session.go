@@ -1,10 +1,12 @@
 package session
 
 import (
+	"crypto/x509"
 	"net"
 
 	"github.com/eclipse/paho.mqtt.golang/packets"
 	"github.com/mainflux/mainflux/logger"
+	"github.com/mainflux/mainflux/pkg/errors"
 )
 
 const (
@@ -12,57 +14,72 @@ const (
 	down
 )
 
+var (
+	errBroker = errors.New("failed proxying from MQTT client to MQTT broker")
+	errClient = errors.New("failed proxying from MQTT broker to MQTT client")
+)
+
 type direction int
 
+// Session represents MQTT Proxy session between client and broker.
 type Session struct {
 	logger   logger.Logger
 	inbound  net.Conn
 	outbound net.Conn
-	event    Event
+	handler  Handler
 	Client   Client
 }
 
-func New(inbound, outbound net.Conn, event Event, logger logger.Logger) *Session {
+// New creates a new Session.
+func New(inbound, outbound net.Conn, handler Handler, logger logger.Logger, cert x509.Certificate) *Session {
 	return &Session{
 		logger:   logger,
 		inbound:  inbound,
 		outbound: outbound,
-		event:    event,
+		handler:  handler,
+		Client: Client{
+			Cert: cert,
+		},
 	}
 }
 
-func (s Session) Stream() error {
+// Stream starts proxying traffic between client and broker.
+func (s *Session) Stream() error {
 	// In parallel read from client, send to broker
-	// and read from broker, send to client
+	// and read from broker, send to client.
 	errs := make(chan error, 2)
 
 	go s.stream(up, s.inbound, s.outbound, errs)
 	go s.stream(down, s.outbound, s.inbound, errs)
 
+	// Handle whichever error happens first.
+	// The other routine won't be blocked when writing
+	// to the errors channel because it is buffered.
 	err := <-errs
-	s.event.Disconnect(&s.Client)
+
+	s.handler.Disconnect(&s.Client)
 	return err
 }
 
-func (s Session) stream(dir direction, r, w net.Conn, errs chan error) {
+func (s *Session) stream(dir direction, r, w net.Conn, errs chan error) {
 	for {
 		// Read from one connection
 		pkt, err := packets.ReadPacket(r)
 		if err != nil {
-			errs <- err
+			errs <- wrap(err, dir)
 			return
 		}
 
 		if dir == up {
 			if err := s.authorize(pkt); err != nil {
-				errs <- err
+				errs <- wrap(err, dir)
 				return
 			}
 		}
 
 		// Send to another
 		if err := pkt.Write(w); err != nil {
-			errs <- err
+			errs <- wrap(err, dir)
 			return
 		}
 
@@ -75,12 +92,10 @@ func (s Session) stream(dir direction, r, w net.Conn, errs chan error) {
 func (s *Session) authorize(pkt packets.ControlPacket) error {
 	switch p := pkt.(type) {
 	case *packets.ConnectPacket:
-		s.Client = Client{
-			ID:       p.ClientIdentifier,
-			Username: p.Username,
-			Password: p.Password,
-		}
-		if err := s.event.AuthConnect(&s.Client); err != nil {
+		s.Client.ID = p.ClientIdentifier
+		s.Client.Username = p.Username
+		s.Client.Password = p.Password
+		if err := s.handler.AuthConnect(&s.Client); err != nil {
 			return err
 		}
 		// Copy back to the packet in case values are changed by Event handler.
@@ -90,25 +105,36 @@ func (s *Session) authorize(pkt packets.ControlPacket) error {
 		p.Password = s.Client.Password
 		return nil
 	case *packets.PublishPacket:
-		return s.event.AuthPublish(&s.Client, &p.TopicName, &p.Payload)
+		return s.handler.AuthPublish(&s.Client, &p.TopicName, &p.Payload)
 	case *packets.SubscribePacket:
-		return s.event.AuthSubscribe(&s.Client, &p.Topics)
+		return s.handler.AuthSubscribe(&s.Client, &p.Topics)
 	default:
 		return nil
 	}
 }
 
-func (s Session) notify(pkt packets.ControlPacket) {
+func (s *Session) notify(pkt packets.ControlPacket) {
 	switch p := pkt.(type) {
 	case *packets.ConnectPacket:
-		s.event.Connect(&s.Client)
+		s.handler.Connect(&s.Client)
 	case *packets.PublishPacket:
-		s.event.Publish(&s.Client, &p.TopicName, &p.Payload)
+		s.handler.Publish(&s.Client, &p.TopicName, &p.Payload)
 	case *packets.SubscribePacket:
-		s.event.Subscribe(&s.Client, &p.Topics)
+		s.handler.Subscribe(&s.Client, &p.Topics)
 	case *packets.UnsubscribePacket:
-		s.event.Unsubscribe(&s.Client, &p.Topics)
+		s.handler.Unsubscribe(&s.Client, &p.Topics)
 	default:
 		return
+	}
+}
+
+func wrap(err error, dir direction) error {
+	switch dir {
+	case up:
+		return errors.Wrap(errClient, err)
+	case down:
+		return errors.Wrap(errBroker, err)
+	default:
+		return err
 	}
 }

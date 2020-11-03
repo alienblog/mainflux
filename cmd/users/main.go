@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/mainflux/mainflux/internal/email"
 	"github.com/mainflux/mainflux/users"
+	"github.com/mainflux/mainflux/users/bcrypt"
 	"github.com/mainflux/mainflux/users/emailer"
 	"github.com/mainflux/mainflux/users/tracing"
 	"google.golang.org/grpc"
@@ -28,7 +30,6 @@ import (
 	authapi "github.com/mainflux/mainflux/authn/api/grpc"
 	"github.com/mainflux/mainflux/logger"
 	"github.com/mainflux/mainflux/users/api"
-	"github.com/mainflux/mainflux/users/bcrypt"
 	"github.com/mainflux/mainflux/users/postgres"
 	opentracing "github.com/opentracing/opentracing-go"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
@@ -41,7 +42,7 @@ const (
 	defDBPort        = "5432"
 	defDBUser        = "mainflux"
 	defDBPass        = "mainflux"
-	defDBName        = "users"
+	defDB            = "users"
 	defDBSSLMode     = "disable"
 	defDBSSLCert     = ""
 	defDBSSLKey      = ""
@@ -51,14 +52,6 @@ const (
 	defServerKey     = ""
 	defJaegerURL     = ""
 
-	defAuthnHTTPPort = "8989"
-	defAuthnGRPCPort = "8181"
-	defAuthnTimeout  = "1" // in seconds
-	defAuthnTLS      = "false"
-	defAuthnCACerts  = ""
-	defAuthnURL      = "localhost:8181"
-
-	defEmailLogLevel    = "debug"
 	defEmailDriver      = "smtp"
 	defEmailHost        = "localhost"
 	defEmailPort        = "25"
@@ -67,15 +60,23 @@ const (
 	defEmailFromAddress = ""
 	defEmailFromName    = ""
 	defEmailTemplate    = "email.tmpl"
+	defAdminEmail       = ""
+	defAdminPassword    = ""
+	defAdminGroup       = "mainflux"
 
 	defTokenResetEndpoint = "/reset-request" // URL where user lands after click on the reset link from email
+
+	defAuthnTLS     = "false"
+	defAuthnCACerts = ""
+	defAuthnURL     = "localhost:8181"
+	defAuthnTimeout = "1s"
 
 	envLogLevel      = "MF_USERS_LOG_LEVEL"
 	envDBHost        = "MF_USERS_DB_HOST"
 	envDBPort        = "MF_USERS_DB_PORT"
 	envDBUser        = "MF_USERS_DB_USER"
 	envDBPass        = "MF_USERS_DB_PASS"
-	envDBName        = "MF_USERS_DB"
+	envDB            = "MF_USERS_DB"
 	envDBSSLMode     = "MF_USERS_DB_SSL_MODE"
 	envDBSSLCert     = "MF_USERS_DB_SSL_CERT"
 	envDBSSLKey      = "MF_USERS_DB_SSL_KEY"
@@ -85,12 +86,8 @@ const (
 	envServerKey     = "MF_USERS_SERVER_KEY"
 	envJaegerURL     = "MF_JAEGER_URL"
 
-	envAuthnHTTPPort = "MF_AUTHN_HTTP_PORT"
-	envAuthnGRPCPort = "MF_AUTHN_GRPC_PORT"
-	envAuthnTimeout  = "MF_AUTHN_TIMEOUT"
-	envAuthnTLS      = "MF_AUTHN_CLIENT_TLS"
-	envAuthnCACerts  = "MF_AUTHN_CA_CERTS"
-	envAuthnURL      = "MF_AUTHN_URL"
+	envAdminEmail    = "MF_USERS_ADMIN_EMAIL"
+	envAdminPassword = "MF_USERS_ADMIN_PASSWORD"
 
 	envEmailDriver      = "MF_EMAIL_DRIVER"
 	envEmailHost        = "MF_EMAIL_HOST"
@@ -103,23 +100,28 @@ const (
 	envEmailTemplate    = "MF_EMAIL_TEMPLATE"
 
 	envTokenResetEndpoint = "MF_TOKEN_RESET_ENDPOINT"
+
+	envAuthnTLS     = "MF_AUTHN_CLIENT_TLS"
+	envAuthnCACerts = "MF_AUTHN_CA_CERTS"
+	envAuthnURL     = "MF_AUTHN_GRPC_URL"
+	envAuthnTimeout = "MF_AUTHN_GRPC_TIMEOUT"
 )
 
 type config struct {
 	logLevel      string
 	dbConfig      postgres.Config
-	authnHTTPPort string
-	authnGRPCPort string
-	authnTimeout  time.Duration
-	authnTLS      bool
-	authnCACerts  string
-	authnURL      string
 	emailConf     email.Config
 	httpPort      string
 	serverCert    string
 	serverKey     string
 	jaegerURL     string
 	resetURL      string
+	authnTLS      bool
+	authnCACerts  string
+	authnURL      string
+	authnTimeout  time.Duration
+	adminEmail    string
+	adminPassword string
 }
 
 func main() {
@@ -129,7 +131,6 @@ func main() {
 	if err != nil {
 		log.Fatalf(err.Error())
 	}
-
 	db := connectToDB(cfg.dbConfig, logger)
 	defer db.Close()
 
@@ -163,7 +164,7 @@ func main() {
 }
 
 func loadConfig() config {
-	timeout, err := strconv.ParseInt(mainflux.Env(envAuthnTimeout, defAuthnTimeout), 10, 64)
+	authnTimeout, err := time.ParseDuration(mainflux.Env(envAuthnTimeout, defAuthnTimeout))
 	if err != nil {
 		log.Fatalf("Invalid %s value: %s", envAuthnTimeout, err.Error())
 	}
@@ -178,7 +179,7 @@ func loadConfig() config {
 		Port:        mainflux.Env(envDBPort, defDBPort),
 		User:        mainflux.Env(envDBUser, defDBUser),
 		Pass:        mainflux.Env(envDBPass, defDBPass),
-		Name:        mainflux.Env(envDBName, defDBName),
+		Name:        mainflux.Env(envDB, defDB),
 		SSLMode:     mainflux.Env(envDBSSLMode, defDBSSLMode),
 		SSLCert:     mainflux.Env(envDBSSLCert, defDBSSLCert),
 		SSLKey:      mainflux.Env(envDBSSLKey, defDBSSLKey),
@@ -199,17 +200,18 @@ func loadConfig() config {
 	return config{
 		logLevel:      mainflux.Env(envLogLevel, defLogLevel),
 		dbConfig:      dbConfig,
-		authnHTTPPort: mainflux.Env(envAuthnHTTPPort, defAuthnHTTPPort),
-		authnGRPCPort: mainflux.Env(envAuthnGRPCPort, defAuthnGRPCPort),
-		authnURL:      mainflux.Env(envAuthnURL, defAuthnURL),
-		authnTimeout:  time.Duration(timeout) * time.Second,
-		authnTLS:      tls,
 		emailConf:     emailConf,
 		httpPort:      mainflux.Env(envHTTPPort, defHTTPPort),
 		serverCert:    mainflux.Env(envServerCert, defServerCert),
 		serverKey:     mainflux.Env(envServerKey, defServerKey),
 		jaegerURL:     mainflux.Env(envJaegerURL, defJaegerURL),
 		resetURL:      mainflux.Env(envTokenResetEndpoint, defTokenResetEndpoint),
+		authnTLS:      tls,
+		authnCACerts:  mainflux.Env(envAuthnCACerts, defAuthnCACerts),
+		authnURL:      mainflux.Env(envAuthnURL, defAuthnURL),
+		authnTimeout:  authnTimeout,
+		adminEmail:    mainflux.Env(envAdminEmail, defAdminEmail),
+		adminPassword: mainflux.Env(envAdminPassword, defAdminPassword),
 	}
 
 }
@@ -237,14 +239,12 @@ func initJaeger(svcName, url string, logger logger.Logger) (opentracing.Tracer, 
 
 	return tracer, closer
 }
-
 func connectToDB(dbConfig postgres.Config, logger logger.Logger) *sqlx.DB {
 	db, err := postgres.Connect(dbConfig)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Failed to connect to postgres: %s", err))
 		os.Exit(1)
 	}
-
 	return db
 }
 
@@ -266,7 +266,7 @@ func connectToAuthn(cfg config, tracer opentracing.Tracer, logger logger.Logger)
 
 	conn, err := grpc.Dial(cfg.authnURL, opts...)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to connect to users service: %s", err))
+		logger.Error(fmt.Sprintf("Failed to connect to authn service: %s", err))
 		os.Exit(1)
 	}
 
@@ -275,14 +275,16 @@ func connectToAuthn(cfg config, tracer opentracing.Tracer, logger logger.Logger)
 
 func newService(db *sqlx.DB, tracer opentracing.Tracer, auth mainflux.AuthNServiceClient, c config, logger logger.Logger) users.Service {
 	database := postgres.NewDatabase(db)
-	repo := tracing.UserRepositoryMiddleware(postgres.New(database), tracer)
 	hasher := bcrypt.New()
+	userRepo := tracing.UserRepositoryMiddleware(postgres.NewUserRepo(database), tracer)
+	groupRepo := tracing.GroupRepositoryMiddleware(postgres.NewGroupRepo(database), tracer)
+
 	emailer, err := emailer.New(c.resetURL, &c.emailConf)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Failed to configure e-mailing util: %s", err.Error()))
 	}
 
-	svc := users.New(repo, hasher, auth, emailer)
+	svc := users.New(userRepo, groupRepo, hasher, auth, emailer)
 	svc = api.LoggingMiddleware(svc, logger)
 	svc = api.MetricsMiddleware(
 		svc,
@@ -299,17 +301,38 @@ func newService(db *sqlx.DB, tracer opentracing.Tracer, auth mainflux.AuthNServi
 			Help:      "Total duration of requests in microseconds.",
 		}, []string{"method"}),
 	)
-
+	if err := createAdmin(svc, userRepo, groupRepo, c); err != nil {
+		logger.Error("failed to create admin user: " + err.Error())
+		os.Exit(1)
+	}
 	return svc
+}
+
+func createAdmin(svc users.Service, userRepo users.UserRepository, groupRepo users.GroupRepository, c config) error {
+	user := users.User{
+		Email:    c.adminEmail,
+		Password: c.adminPassword,
+	}
+
+	if _, err := userRepo.RetrieveByEmail(context.Background(), user.Email); err == nil {
+		// Exiting if user already exists
+		return nil
+	}
+
+	if _, err := svc.Register(context.Background(), user); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func startHTTPServer(tracer opentracing.Tracer, svc users.Service, port string, certFile string, keyFile string, logger logger.Logger, errs chan error) {
 	p := fmt.Sprintf(":%s", port)
 	if certFile != "" || keyFile != "" {
 		logger.Info(fmt.Sprintf("Users service started using https, cert %s key %s, exposed port %s", certFile, keyFile, port))
-		errs <- http.ListenAndServeTLS(p, certFile, keyFile, api.MakeHandler(svc, tracer, logger))
+		errs <- http.ListenAndServeTLS(p, certFile, keyFile, api.MakeHandler(svc, tracer))
 	} else {
 		logger.Info(fmt.Sprintf("Users service started using http, exposed port %s", port))
-		errs <- http.ListenAndServe(p, api.MakeHandler(svc, tracer, logger))
+		errs <- http.ListenAndServe(p, api.MakeHandler(svc, tracer))
 	}
 }

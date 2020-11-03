@@ -18,6 +18,7 @@ import (
 	httpapi "github.com/mainflux/mainflux/authn/api/http"
 	"github.com/mainflux/mainflux/authn/jwt"
 	"github.com/mainflux/mainflux/authn/mocks"
+	"github.com/mainflux/mainflux/pkg/uuid"
 	"github.com/opentracing/opentracing-go/mocktracer"
 	"github.com/stretchr/testify/assert"
 )
@@ -63,9 +64,9 @@ func (tr testRequest) make() (*http.Response, error) {
 
 func newService() authn.Service {
 	repo := mocks.NewKeyRepository()
-	idp := mocks.NewIdentityProvider()
+	uuidProvider := uuid.NewMock()
 	t := jwt.New(secret)
-	return authn.New(repo, idp, t)
+	return authn.New(repo, uuidProvider, t)
 }
 
 func newServer(svc authn.Service) *httptest.Server {
@@ -80,7 +81,7 @@ func toJSON(data interface{}) string {
 
 func TestIssue(t *testing.T) {
 	svc := newService()
-	userKey, err := svc.Issue(context.Background(), email, authn.Key{Type: authn.UserKey, IssuedAt: time.Now()})
+	_, loginSecret, err := svc.Issue(context.Background(), "", authn.Key{Type: authn.UserKey, IssuedAt: time.Now(), IssuerID: id, Subject: email})
 	assert.Nil(t, err, fmt.Sprintf("Issuing user key expected to succeed: %s", err))
 
 	ts := newServer(svc)
@@ -109,27 +110,28 @@ func TestIssue(t *testing.T) {
 			desc:   "issue API key",
 			req:    toJSON(ak),
 			ct:     contentType,
-			token:  userKey.Secret,
+			token:  loginSecret,
 			status: http.StatusCreated,
 		},
 		{
 			desc:   "issue recovery key",
 			req:    toJSON(rk),
 			ct:     contentType,
-			token:  userKey.Secret,
+			token:  loginSecret,
 			status: http.StatusBadRequest,
 		},
 		{
-			desc: "issue user key wrong content type",
-			req:  toJSON(uk),
-			ct:   "", token: userKey.Secret,
+			desc:   "issue user key wrong content type",
+			req:    toJSON(uk),
+			ct:     "",
+			token:  loginSecret,
 			status: http.StatusUnsupportedMediaType,
 		},
 		{
-			desc:   "issue key wrong content type",
+			desc:   "issue recovery key wrong content type",
 			req:    toJSON(rk),
 			ct:     "",
-			token:  userKey.Secret,
+			token:  loginSecret,
 			status: http.StatusUnsupportedMediaType,
 		},
 		{
@@ -186,11 +188,11 @@ func TestIssue(t *testing.T) {
 
 func TestRetrieve(t *testing.T) {
 	svc := newService()
-	loginKey, err := svc.Issue(context.Background(), email, authn.Key{Type: authn.UserKey, IssuedAt: time.Now()})
+	_, loginSecret, err := svc.Issue(context.Background(), "", authn.Key{Type: authn.UserKey, IssuedAt: time.Now(), IssuerID: id, Subject: email})
 	assert.Nil(t, err, fmt.Sprintf("Issuing login key expected to succeed: %s", err))
-	key := authn.Key{Type: authn.APIKey, IssuedAt: time.Now()}
+	key := authn.Key{Type: authn.APIKey, IssuedAt: time.Now(), IssuerID: id, Subject: email}
 
-	k, err := svc.Issue(context.Background(), loginKey.Secret, key)
+	k, _, err := svc.Issue(context.Background(), loginSecret, key)
 	assert.Nil(t, err, fmt.Sprintf("Issuing login key expected to succeed: %s", err))
 
 	ts := newServer(svc)
@@ -206,13 +208,13 @@ func TestRetrieve(t *testing.T) {
 		{
 			desc:   "retrieve an existing key",
 			id:     k.ID,
-			token:  loginKey.Secret,
+			token:  loginSecret,
 			status: http.StatusOK,
 		},
 		{
 			desc:   "retrieve a non-existing key",
 			id:     "non-existing",
-			token:  loginKey.Secret,
+			token:  loginSecret,
 			status: http.StatusNotFound,
 		},
 		{
@@ -238,11 +240,11 @@ func TestRetrieve(t *testing.T) {
 
 func TestRevoke(t *testing.T) {
 	svc := newService()
-	userKey, err := svc.Issue(context.Background(), email, authn.Key{Type: authn.UserKey, IssuedAt: time.Now()})
+	_, loginSecret, err := svc.Issue(context.Background(), "", authn.Key{Type: authn.UserKey, IssuedAt: time.Now(), IssuerID: id, Subject: email})
 	assert.Nil(t, err, fmt.Sprintf("Issuing user key expected to succeed: %s", err))
-	key := authn.Key{Type: authn.APIKey, IssuedAt: time.Now()}
+	key := authn.Key{Type: authn.APIKey, IssuedAt: time.Now(), IssuerID: id, Subject: email}
 
-	k, err := svc.Issue(context.Background(), userKey.Secret, key)
+	k, _, err := svc.Issue(context.Background(), loginSecret, key)
 	assert.Nil(t, err, fmt.Sprintf("Issuing user key expected to succeed: %s", err))
 
 	ts := newServer(svc)
@@ -258,13 +260,13 @@ func TestRevoke(t *testing.T) {
 		{
 			desc:   "revoke an existing key",
 			id:     k.ID,
-			token:  userKey.Secret,
+			token:  loginSecret,
 			status: http.StatusNoContent,
 		},
 		{
 			desc:   "revoke a non-existing key",
 			id:     "non-existing",
-			token:  userKey.Secret,
+			token:  loginSecret,
 			status: http.StatusNoContent,
 		},
 		{

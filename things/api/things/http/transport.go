@@ -15,7 +15,7 @@ import (
 	kithttp "github.com/go-kit/kit/transport/http"
 	"github.com/go-zoo/bone"
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/errors"
+	"github.com/mainflux/mainflux/pkg/errors"
 	"github.com/mainflux/mainflux/things"
 	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -23,10 +23,11 @@ import (
 
 const (
 	contentType = "application/json"
-	offset      = "offset"
-	limit       = "limit"
-	name        = "name"
-	metadata    = "metadata"
+	offsetKey   = "offset"
+	limitKey    = "limit"
+	nameKey     = "name"
+	metadataKey = "metadata"
+	connKey     = "connected"
 
 	defOffset = 0
 	defLimit  = 10
@@ -288,22 +289,22 @@ func decodeView(_ context.Context, r *http.Request) (interface{}, error) {
 }
 
 func decodeList(_ context.Context, r *http.Request) (interface{}, error) {
-	o, err := readUintQuery(r, offset, defOffset)
+	o, err := readUintQuery(r, offsetKey, defOffset)
 	if err != nil {
 		return nil, err
 	}
 
-	l, err := readUintQuery(r, limit, defLimit)
+	l, err := readUintQuery(r, limitKey, defLimit)
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := readStringQuery(r, name)
+	n, err := readStringQuery(r, nameKey)
 	if err != nil {
 		return nil, err
 	}
 
-	m, err := readMetadataQuery(r, "metadata")
+	m, err := readMetadataQuery(r, metadataKey)
 	if err != nil {
 		return nil, err
 	}
@@ -320,21 +321,27 @@ func decodeList(_ context.Context, r *http.Request) (interface{}, error) {
 }
 
 func decodeListByConnection(_ context.Context, r *http.Request) (interface{}, error) {
-	o, err := readUintQuery(r, offset, defOffset)
+	o, err := readUintQuery(r, offsetKey, defOffset)
 	if err != nil {
 		return nil, err
 	}
 
-	l, err := readUintQuery(r, limit, defLimit)
+	l, err := readUintQuery(r, limitKey, defLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	c, err := readBoolQuery(r, connKey)
 	if err != nil {
 		return nil, err
 	}
 
 	req := listByConnectionReq{
-		token:  r.Header.Get("Authorization"),
-		id:     bone.GetValue(r, "id"),
-		offset: o,
-		limit:  l,
+		token:     r.Header.Get("Authorization"),
+		id:        bone.GetValue(r, "id"),
+		connected: c,
+		offset:    o,
+		limit:     l,
 	}
 
 	return req, nil
@@ -386,22 +393,41 @@ func encodeError(_ context.Context, err error, w http.ResponseWriter) {
 	case errors.Error:
 		w.Header().Set("Content-Type", contentType)
 		switch {
+		case errors.Contains(errorVal, things.ErrUnauthorizedAccess),
+			errors.Contains(errorVal, things.ErrEntityConnected):
+			w.WriteHeader(http.StatusUnauthorized)
+
+		case errors.Contains(errorVal, errInvalidQueryParams):
+			w.WriteHeader(http.StatusBadRequest)
+		case errors.Contains(errorVal, errUnsupportedContentType):
+			w.WriteHeader(http.StatusUnsupportedMediaType)
+
 		case errors.Contains(errorVal, things.ErrMalformedEntity):
 			w.WriteHeader(http.StatusBadRequest)
-		case errors.Contains(errorVal, things.ErrUnauthorizedAccess):
-			w.WriteHeader(http.StatusForbidden)
 		case errors.Contains(errorVal, things.ErrNotFound):
 			w.WriteHeader(http.StatusNotFound)
 		case errors.Contains(errorVal, things.ErrConflict):
+			w.WriteHeader(http.StatusConflict)
+
+		case errors.Contains(errorVal, things.ErrScanMetadata),
+			errors.Contains(errorVal, things.ErrSelectEntity):
 			w.WriteHeader(http.StatusUnprocessableEntity)
-		case errors.Contains(errorVal, errUnsupportedContentType):
-			w.WriteHeader(http.StatusUnsupportedMediaType)
-		case errors.Contains(errorVal, errInvalidQueryParams):
+
+		case errors.Contains(errorVal, things.ErrCreateEntity),
+			errors.Contains(errorVal, things.ErrUpdateEntity),
+			errors.Contains(errorVal, things.ErrViewEntity),
+			errors.Contains(errorVal, things.ErrRemoveEntity),
+			errors.Contains(errorVal, things.ErrConnect),
+			errors.Contains(errorVal, things.ErrDisconnect):
 			w.WriteHeader(http.StatusBadRequest)
-		case errors.Contains(errorVal, io.ErrUnexpectedEOF):
+
+		case errors.Contains(errorVal, io.ErrUnexpectedEOF),
+			errors.Contains(errorVal, io.EOF):
 			w.WriteHeader(http.StatusBadRequest)
-		case errors.Contains(errorVal, io.EOF):
-			w.WriteHeader(http.StatusBadRequest)
+
+		case errors.Contains(errorVal, things.ErrCreateUUID):
+			w.WriteHeader(http.StatusInternalServerError)
+
 		default:
 			w.WriteHeader(http.StatusInternalServerError)
 		}
@@ -460,8 +486,26 @@ func readMetadataQuery(r *http.Request, key string) (map[string]interface{}, err
 	m := make(map[string]interface{})
 	err := json.Unmarshal([]byte(vals[0]), &m)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(errInvalidQueryParams, err)
 	}
 
 	return m, nil
+}
+
+func readBoolQuery(r *http.Request, key string) (bool, error) {
+	vals := bone.GetQuery(r, key)
+	if len(vals) > 1 {
+		return true, errInvalidQueryParams
+	}
+
+	if len(vals) == 0 {
+		return true, nil
+	}
+
+	b, err := strconv.ParseBool(vals[0])
+	if err != nil {
+		return true, errInvalidQueryParams
+	}
+
+	return b, nil
 }

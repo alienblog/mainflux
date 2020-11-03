@@ -6,11 +6,12 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/mainflux/mainflux/pkg/errors"
 
 	kitot "github.com/go-kit/kit/tracing/opentracing"
 	kithttp "github.com/go-kit/kit/transport/http"
@@ -77,13 +78,6 @@ func MakeHandler(tracer opentracing.Tracer, svc twins.Service) http.Handler {
 	r.Get("/twins", kithttp.NewServer(
 		kitot.TraceServer(tracer, "list_twins")(listTwinsEndpoint(svc)),
 		decodeList,
-		encodeResponse,
-		opts...,
-	))
-
-	r.Get("/things/:id", kithttp.NewServer(
-		kitot.TraceServer(tracer, "view_twin_by_thing")(viewTwinByThingEndpoint(svc)),
-		decodeViewTwinByThing,
 		encodeResponse,
 		opts...,
 	))
@@ -192,15 +186,6 @@ func decodeListStates(_ context.Context, r *http.Request) (interface{}, error) {
 	return req, nil
 }
 
-func decodeViewTwinByThing(_ context.Context, r *http.Request) (interface{}, error) {
-	req := viewTwinReq{
-		token: r.Header.Get("Authorization"),
-		id:    bone.GetValue(r, "id"),
-	}
-
-	return req, nil
-}
-
 func encodeResponse(_ context.Context, w http.ResponseWriter, response interface{}) error {
 	w.Header().Set("Content-Type", contentType)
 
@@ -296,7 +281,7 @@ func readMetadataQuery(r *http.Request, key string) (map[string]interface{}, err
 	m := make(map[string]interface{})
 	err := json.Unmarshal([]byte(vals[0]), &m)
 	if err != nil {
-		return nil, err
+		return nil, errInvalidQueryParams
 	}
 
 	return m, nil

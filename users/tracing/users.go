@@ -13,11 +13,10 @@ import (
 )
 
 const (
-	saveOp             = "save_op"
-	retrieveByIDOp     = "retrieve_by_id"
-	generateResetToken = "generate_reset_token"
-	updatePassword     = "update_password"
-	sendPasswordReset  = "send_reset_password"
+	saveOp            = "save_op"
+	retrieveByEmailOp = "retrieve_by_email"
+	updatePassword    = "update_password"
+	members           = "members"
 )
 
 var _ users.UserRepository = (*userRepositoryMiddleware)(nil)
@@ -36,7 +35,7 @@ func UserRepositoryMiddleware(repo users.UserRepository, tracer opentracing.Trac
 	}
 }
 
-func (urm userRepositoryMiddleware) Save(ctx context.Context, user users.User) error {
+func (urm userRepositoryMiddleware) Save(ctx context.Context, user users.User) (string, error) {
 	span := createSpan(ctx, urm.tracer, saveOp)
 	defer span.Finish()
 	ctx = opentracing.ContextWithSpan(ctx, span)
@@ -52,8 +51,16 @@ func (urm userRepositoryMiddleware) UpdateUser(ctx context.Context, user users.U
 	return urm.repo.UpdateUser(ctx, user)
 }
 
+func (urm userRepositoryMiddleware) RetrieveByEmail(ctx context.Context, email string) (users.User, error) {
+	span := createSpan(ctx, urm.tracer, retrieveByEmailOp)
+	defer span.Finish()
+	ctx = opentracing.ContextWithSpan(ctx, span)
+
+	return urm.repo.RetrieveByEmail(ctx, email)
+}
+
 func (urm userRepositoryMiddleware) RetrieveByID(ctx context.Context, id string) (users.User, error) {
-	span := createSpan(ctx, urm.tracer, retrieveByIDOp)
+	span := createSpan(ctx, urm.tracer, retrieveByEmailOp)
 	defer span.Finish()
 	ctx = opentracing.ContextWithSpan(ctx, span)
 
@@ -66,6 +73,22 @@ func (urm userRepositoryMiddleware) UpdatePassword(ctx context.Context, email, p
 	ctx = opentracing.ContextWithSpan(ctx, span)
 
 	return urm.repo.UpdatePassword(ctx, email, password)
+}
+
+func (urm userRepositoryMiddleware) RetrieveAll(ctx context.Context, offset, limit uint64, email string, um users.Metadata) (users.UserPage, error) {
+	span := createSpan(ctx, urm.tracer, members)
+	defer span.Finish()
+	ctx = opentracing.ContextWithSpan(ctx, span)
+
+	return urm.repo.RetrieveAll(ctx, offset, limit, email, um)
+}
+
+func (urm userRepositoryMiddleware) RetrieveMembers(ctx context.Context, groupID string, offset, limit uint64, um users.Metadata) (users.UserPage, error) {
+	span := createSpan(ctx, urm.tracer, members)
+	defer span.Finish()
+	ctx = opentracing.ContextWithSpan(ctx, span)
+
+	return urm.repo.RetrieveMembers(ctx, groupID, offset, limit, um)
 }
 
 func createSpan(ctx context.Context, tracer opentracing.Tracer, opName string) opentracing.Span {

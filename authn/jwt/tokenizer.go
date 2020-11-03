@@ -8,15 +8,19 @@ import (
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/mainflux/mainflux/authn"
+	"github.com/mainflux/mainflux/pkg/errors"
 )
+
+const issuerName = "mainflux.authn"
 
 type claims struct {
 	jwt.StandardClaims
-	Type *uint32 `json:"type,omitempty"`
+	IssuerID string  `json:"issuer_id,omitempty"`
+	Type     *uint32 `json:"type,omitempty"`
 }
 
 func (c claims) Valid() error {
-	if c.Type == nil || *c.Type > authn.APIKey {
+	if c.Type == nil || *c.Type > authn.APIKey || c.Issuer != issuerName {
 		return authn.ErrMalformedEntity
 	}
 
@@ -35,11 +39,12 @@ func New(secret string) authn.Tokenizer {
 func (svc tokenizer) Issue(key authn.Key) (string, error) {
 	claims := claims{
 		StandardClaims: jwt.StandardClaims{
-			Issuer:   key.Issuer,
-			Subject:  key.Secret,
+			Issuer:   issuerName,
+			Subject:  key.Subject,
 			IssuedAt: key.IssuedAt.UTC().Unix(),
 		},
-		Type: &key.Type,
+		IssuerID: key.IssuerID,
+		Type:     &key.Type,
 	}
 
 	if !key.ExpiresAt.IsZero() {
@@ -68,9 +73,9 @@ func (svc tokenizer) Parse(token string) (authn.Key, error) {
 			if c.Type != nil && *c.Type == authn.APIKey {
 				return c.toKey(), nil
 			}
-			return authn.Key{}, authn.ErrKeyExpired
+			return authn.Key{}, errors.Wrap(authn.ErrKeyExpired, err)
 		}
-		return authn.Key{}, authn.ErrUnauthorizedAccess
+		return authn.Key{}, errors.Wrap(authn.ErrUnauthorizedAccess, err)
 	}
 
 	return c.toKey(), nil
@@ -79,8 +84,8 @@ func (svc tokenizer) Parse(token string) (authn.Key, error) {
 func (c claims) toKey() authn.Key {
 	key := authn.Key{
 		ID:       c.Id,
-		Issuer:   c.Issuer,
-		Secret:   c.Subject,
+		IssuerID: c.IssuerID,
+		Subject:  c.Subject,
 		IssuedAt: time.Unix(c.IssuedAt, 0).UTC(),
 	}
 	if c.ExpiresAt != 0 {

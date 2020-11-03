@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/errors"
-	mfsdk "github.com/mainflux/mainflux/sdk/go"
+	"github.com/mainflux/mainflux/pkg/errors"
+	mfsdk "github.com/mainflux/mainflux/pkg/sdk/go"
 )
 
 var (
@@ -36,13 +36,15 @@ var (
 	// ErrExternalKeyNotFound indicates a non-existent bootstrap configuration for given external key
 	ErrExternalKeyNotFound = errors.New("failed to get bootstrap configuration for given external key")
 
-	// ErrSecureBootstrap indicates erron in getting bootstrap configuration for given encrypted external key
+	// ErrSecureBootstrap indicates error in getting bootstrap configuration for given encrypted external key
 	ErrSecureBootstrap = errors.New("failed to get bootstrap configuration for given encrypted external key")
+
+	// ErrBootstrap indicates error in getting bootstrap configuration.
+	ErrBootstrap = errors.New("failed to read bootstrap configuration")
 
 	errAddBootstrap       = errors.New("failed to add bootstrap configuration")
 	errUpdateConnections  = errors.New("failed to update connections")
 	errRemoveBootstrap    = errors.New("failed to remove bootstrap configuration")
-	errBootstrap          = errors.New("failed to read bootstrap configuration")
 	errChangeState        = errors.New("failed to change state of bootstrap configuration")
 	errUpdateChannel      = errors.New("failed to update channel")
 	errRemoveConfig       = errors.New("failed to remove bootstrap configuration")
@@ -60,34 +62,34 @@ var _ Service = (*bootstrapService)(nil)
 // Service specifies an API that must be fulfilled by the domain service
 // implementation, and all of its decorators (e.g. logging & metrics).
 type Service interface {
-	// Add adds new Thing Config to the user identified by the provided key.
-	Add(key string, cfg Config) (Config, error)
+	// Add adds new Thing Config to the user identified by the provided token.
+	Add(token string, cfg Config) (Config, error)
 
-	// View returns Thing Config with given ID belonging to the user identified by the given key.
-	View(key, id string) (Config, error)
+	// View returns Thing Config with given ID belonging to the user identified by the given token.
+	View(token, id string) (Config, error)
 
 	// Update updates editable fields of the provided Config.
-	Update(key string, cfg Config) error
+	Update(token string, cfg Config) error
 
-	// UpdateCert updates an existing Config certificate and key.
+	// UpdateCert updates an existing Config certificate and token.
 	// A non-nil error is returned to indicate operation failure.
-	UpdateCert(key, thingID, clientCert, clientKey, caCert string) error
+	UpdateCert(token, thingID, clientCert, clientKey, caCert string) error
 
 	// UpdateConnections updates list of Channels related to given Config.
-	UpdateConnections(key, id string, connections []string) error
+	UpdateConnections(token, id string, connections []string) error
 
 	// List returns subset of Configs with given search params that belong to the
-	// user identified by the given key.
-	List(key string, filter Filter, offset, limit uint64) (ConfigsPage, error)
+	// user identified by the given token.
+	List(token string, filter Filter, offset, limit uint64) (ConfigsPage, error)
 
-	// Remove removes Config with specified key that belongs to the user identified by the given key.
-	Remove(key, id string) error
+	// Remove removes Config with specified token that belongs to the user identified by the given token.
+	Remove(token, id string) error
 
 	// Bootstrap returns Config to the Thing with provided external ID using external key.
 	Bootstrap(externalKey, externalID string, secure bool) (Config, error)
 
 	// ChangeState changes state of the Thing with given ID and owner.
-	ChangeState(key, id string, state State) error
+	ChangeState(token, id string, state State) error
 
 	// Methods RemoveConfig, UpdateChannel, and RemoveChannel are used as
 	// handlers for events. That's why these methods surpass ownership check.
@@ -131,8 +133,8 @@ func New(auth mainflux.AuthNServiceClient, configs ConfigRepository, sdk mfsdk.S
 	}
 }
 
-func (bs bootstrapService) Add(key string, cfg Config) (Config, error) {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) Add(token string, cfg Config) (Config, error) {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return Config{}, err
 	}
@@ -145,14 +147,14 @@ func (bs bootstrapService) Add(key string, cfg Config) (Config, error) {
 		return Config{}, errors.Wrap(errCheckChannels, err)
 	}
 
-	cfg.MFChannels, err = bs.connectionChannels(toConnect, bs.toIDList(existing), key)
+	cfg.MFChannels, err = bs.connectionChannels(toConnect, bs.toIDList(existing), token)
 
 	if err != nil {
 		return Config{}, errors.Wrap(errConnectionChannels, err)
 	}
 
 	id := cfg.MFThing
-	mfThing, err := bs.thing(key, id)
+	mfThing, err := bs.thing(token, id)
 	if err != nil {
 		return Config{}, errors.Wrap(errAddBootstrap, err)
 	}
@@ -161,12 +163,13 @@ func (bs bootstrapService) Add(key string, cfg Config) (Config, error) {
 	cfg.Owner = owner
 	cfg.State = Inactive
 	cfg.MFKey = mfThing.Key
-	saved, err := bs.configs.Save(cfg, toConnect)
 
+	saved, err := bs.configs.Save(cfg, toConnect)
 	if err != nil {
 		if id == "" {
-			// Fail silently.
-			bs.sdk.DeleteThing(cfg.MFThing, key)
+			if errT := bs.sdk.DeleteThing(cfg.MFThing, token); errT != nil {
+				err = errors.Wrap(err, errT)
+			}
 		}
 		return Config{}, errors.Wrap(errAddBootstrap, err)
 	}
@@ -177,8 +180,8 @@ func (bs bootstrapService) Add(key string, cfg Config) (Config, error) {
 	return cfg, nil
 }
 
-func (bs bootstrapService) View(key, id string) (Config, error) {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) View(token, id string) (Config, error) {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return Config{}, err
 	}
@@ -186,8 +189,8 @@ func (bs bootstrapService) View(key, id string) (Config, error) {
 	return bs.configs.RetrieveByID(owner, id)
 }
 
-func (bs bootstrapService) Update(key string, cfg Config) error {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) Update(token string, cfg Config) error {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return err
 	}
@@ -197,8 +200,8 @@ func (bs bootstrapService) Update(key string, cfg Config) error {
 	return bs.configs.Update(cfg)
 }
 
-func (bs bootstrapService) UpdateCert(key, thingID, clientCert, clientKey, caCert string) error {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) UpdateCert(token, thingID, clientCert, clientKey, caCert string) error {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return err
 	}
@@ -208,8 +211,8 @@ func (bs bootstrapService) UpdateCert(key, thingID, clientCert, clientKey, caCer
 	return nil
 }
 
-func (bs bootstrapService) UpdateConnections(key, id string, connections []string) error {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) UpdateConnections(token, id string, connections []string) error {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return err
 	}
@@ -227,7 +230,7 @@ func (bs bootstrapService) UpdateConnections(key, id string, connections []strin
 		return errors.Wrap(errUpdateConnections, err)
 	}
 
-	channels, err := bs.connectionChannels(connections, bs.toIDList(existing), key)
+	channels, err := bs.connectionChannels(connections, bs.toIDList(existing), token)
 	if err != nil {
 		return errors.Wrap(errUpdateConnections, err)
 	}
@@ -241,8 +244,8 @@ func (bs bootstrapService) UpdateConnections(key, id string, connections []strin
 	}
 
 	for _, c := range disconnect {
-		if err := bs.sdk.DisconnectThing(id, c, key); err != nil {
-			if err == mfsdk.ErrNotFound {
+		if err := bs.sdk.DisconnectThing(id, c, token); err != nil {
+			if errors.Contains(err, mfsdk.ErrFailedDisconnect) {
 				continue
 			}
 			return ErrThings
@@ -254,8 +257,8 @@ func (bs bootstrapService) UpdateConnections(key, id string, connections []strin
 			ChannelIDs: []string{c},
 			ThingIDs:   []string{id},
 		}
-		if err := bs.sdk.Connect(conIDs, key); err != nil {
-			if err == mfsdk.ErrNotFound {
+		if err := bs.sdk.Connect(conIDs, token); err != nil {
+			if errors.Contains(err, mfsdk.ErrFailedConnect) {
 				return ErrMalformedEntity
 			}
 			return ErrThings
@@ -265,21 +268,17 @@ func (bs bootstrapService) UpdateConnections(key, id string, connections []strin
 	return bs.configs.UpdateConnections(owner, id, channels, connections)
 }
 
-func (bs bootstrapService) List(key string, filter Filter, offset, limit uint64) (ConfigsPage, error) {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) List(token string, filter Filter, offset, limit uint64) (ConfigsPage, error) {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return ConfigsPage{}, err
-	}
-
-	if filter.Unknown {
-		return bs.configs.RetrieveUnknown(offset, limit), nil
 	}
 
 	return bs.configs.RetrieveAll(owner, filter, offset, limit), nil
 }
 
-func (bs bootstrapService) Remove(key, id string) error {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) Remove(token, id string) error {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return err
 	}
@@ -292,11 +291,7 @@ func (bs bootstrapService) Remove(key, id string) error {
 func (bs bootstrapService) Bootstrap(externalKey, externalID string, secure bool) (Config, error) {
 	cfg, err := bs.configs.RetrieveByExternalID(externalID)
 	if err != nil {
-		if errors.Contains(err, ErrNotFound) {
-			bs.configs.SaveUnknown(externalKey, externalID)
-			return Config{}, ErrNotFound
-		}
-		return cfg, errors.Wrap(errBootstrap, err)
+		return cfg, errors.Wrap(ErrBootstrap, err)
 	}
 
 	if secure {
@@ -314,8 +309,8 @@ func (bs bootstrapService) Bootstrap(externalKey, externalID string, secure bool
 	return cfg, nil
 }
 
-func (bs bootstrapService) ChangeState(key, id string, state State) error {
-	owner, err := bs.identify(key)
+func (bs bootstrapService) ChangeState(token, id string, state State) error {
+	owner, err := bs.identify(token)
 	if err != nil {
 		return err
 	}
@@ -336,14 +331,14 @@ func (bs bootstrapService) ChangeState(key, id string, state State) error {
 				ChannelIDs: []string{c.ID},
 				ThingIDs:   []string{cfg.MFThing},
 			}
-			if err := bs.sdk.Connect(conIDs, key); err != nil {
+			if err := bs.sdk.Connect(conIDs, token); err != nil {
 				return ErrThings
 			}
 		}
 	case Inactive:
 		for _, c := range cfg.MFChannels {
-			if err := bs.sdk.DisconnectThing(cfg.MFThing, c.ID, key); err != nil {
-				if err == mfsdk.ErrNotFound {
+			if err := bs.sdk.DisconnectThing(cfg.MFThing, c.ID, token); err != nil {
+				if errors.Contains(err, mfsdk.ErrFailedDisconnect) {
 					continue
 				}
 				return ErrThings
@@ -393,38 +388,40 @@ func (bs bootstrapService) identify(token string) (string, error) {
 		return "", ErrUnauthorizedAccess
 	}
 
-	return res.GetValue(), nil
+	return res.GetEmail(), nil
 }
 
 // Method thing retrieves Mainflux Thing creating one if an empty ID is passed.
-func (bs bootstrapService) thing(key, id string) (mfsdk.Thing, error) {
+func (bs bootstrapService) thing(token, id string) (mfsdk.Thing, error) {
 	thingID := id
 	var err error
 
 	if id == "" {
-		thingID, err = bs.sdk.CreateThing(mfsdk.Thing{}, key)
+		thingID, err = bs.sdk.CreateThing(mfsdk.Thing{}, token)
 		if err != nil {
 			return mfsdk.Thing{}, errors.Wrap(errCreateThing, err)
 		}
 	}
 
-	thing, err := bs.sdk.Thing(thingID, key)
+	thing, err := bs.sdk.Thing(thingID, token)
 	if err != nil {
-		if err == mfsdk.ErrNotFound {
+		if errors.Contains(err, mfsdk.ErrFailedFetch) {
 			return mfsdk.Thing{}, errors.Wrap(errThingNotFound, ErrNotFound)
 		}
 
 		if id != "" {
-			bs.sdk.DeleteThing(thingID, key)
+			if errT := bs.sdk.DeleteThing(thingID, token); errT != nil {
+				err = errors.Wrap(err, errT)
+			}
 		}
 
-		return mfsdk.Thing{}, ErrThings
+		return mfsdk.Thing{}, errors.Wrap(ErrThings, err)
 	}
 
 	return thing, nil
 }
 
-func (bs bootstrapService) connectionChannels(channels, existing []string, key string) ([]Channel, error) {
+func (bs bootstrapService) connectionChannels(channels, existing []string, token string) ([]Channel, error) {
 	add := make(map[string]bool, len(channels))
 	for _, ch := range channels {
 		add[ch] = true
@@ -438,7 +435,7 @@ func (bs bootstrapService) connectionChannels(channels, existing []string, key s
 
 	var ret []Channel
 	for id := range add {
-		ch, err := bs.sdk.Channel(id, key)
+		ch, err := bs.sdk.Channel(id, token)
 		if err != nil {
 			return nil, errors.Wrap(ErrMalformedEntity, err)
 		}

@@ -16,18 +16,20 @@ import (
 	"time"
 
 	kitprometheus "github.com/go-kit/kit/metrics/prometheus"
-	"github.com/gogo/protobuf/proto"
+	"github.com/go-redis/redis"
 	"github.com/mainflux/mainflux"
 	authapi "github.com/mainflux/mainflux/authn/api/grpc"
-	"github.com/mainflux/mainflux/broker"
 	"github.com/mainflux/mainflux/logger"
+	"github.com/mainflux/mainflux/pkg/messaging"
+	"github.com/mainflux/mainflux/pkg/messaging/nats"
+	uuidProvider "github.com/mainflux/mainflux/pkg/uuid"
 	localusers "github.com/mainflux/mainflux/things/users"
 	"github.com/mainflux/mainflux/twins"
 	"github.com/mainflux/mainflux/twins/api"
 	twapi "github.com/mainflux/mainflux/twins/api/http"
 	twmongodb "github.com/mainflux/mainflux/twins/mongodb"
-	"github.com/mainflux/mainflux/twins/uuid"
-	"github.com/nats-io/nats.go"
+	rediscache "github.com/mainflux/mainflux/twins/redis"
+	"github.com/mainflux/mainflux/twins/tracing"
 	opentracing "github.com/opentracing/opentracing-go"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
 	jconfig "github.com/uber/jaeger-client-go/config"
@@ -40,45 +42,45 @@ import (
 const (
 	queue = "twins"
 
-	defLogLevel        = "info"
-	defHTTPPort        = "9021"
+	defLogLevel        = "error"
+	defHTTPPort        = "8180"
 	defJaegerURL       = ""
 	defServerCert      = ""
 	defServerKey       = ""
-	defDBName          = "mainflux"
+	defDB              = "mainflux-twins"
 	defDBHost          = "localhost"
 	defDBPort          = "27017"
+	defCacheURL        = "localhost:6379"
+	defCachePass       = ""
+	defCacheDB         = "0"
 	defSingleUserEmail = ""
 	defSingleUserToken = ""
 	defClientTLS       = "false"
 	defCACerts         = ""
-	defThingID         = ""
-	defThingKey        = ""
 	defChannelID       = ""
-	defNatsURL         = mainflux.DefNatsURL
-
-	defAuthnTimeout = "1" // in seconds
-	defAuthnURL     = "localhost:8181"
+	defNatsURL         = "nats://localhost:4222"
+	defAuthnURL        = "localhost:8181"
+	defAuthnTimeout    = "1s"
 
 	envLogLevel        = "MF_TWINS_LOG_LEVEL"
 	envHTTPPort        = "MF_TWINS_HTTP_PORT"
 	envJaegerURL       = "MF_JAEGER_URL"
 	envServerCert      = "MF_TWINS_SERVER_CERT"
 	envServerKey       = "MF_TWINS_SERVER_KEY"
-	envDBName          = "MF_TWINS_DB_NAME"
+	envDB              = "MF_TWINS_DB"
 	envDBHost          = "MF_TWINS_DB_HOST"
 	envDBPort          = "MF_TWINS_DB_PORT"
+	envCacheURL        = "MF_TWINS_CACHE_URL"
+	envCachePass       = "MF_TWINS_CACHE_PASS"
+	envCacheDB         = "MF_TWINS_CACHE_DB"
 	envSingleUserEmail = "MF_TWINS_SINGLE_USER_EMAIL"
 	envSingleUserToken = "MF_TWINS_SINGLE_USER_TOKEN"
 	envClientTLS       = "MF_TWINS_CLIENT_TLS"
 	envCACerts         = "MF_TWINS_CA_CERTS"
-	envThingID         = "MF_TWINS_THING_ID"
-	envThingKey        = "MF_TWINS_THING_KEY"
 	envChannelID       = "MF_TWINS_CHANNEL_ID"
 	envNatsURL         = "MF_NATS_URL"
-
-	envAuthnTimeout = "MF_AUTHN_TIMEOUT"
-	envAuthnURL     = "MF_AUTHN_URL"
+	envAuthnURL        = "MF_AUTHN_GRPC_URL"
+	envAuthnTimeout    = "MF_AUTHN_GRPC_TIMEOUT"
 )
 
 type config struct {
@@ -88,17 +90,18 @@ type config struct {
 	serverCert      string
 	serverKey       string
 	dbCfg           twmongodb.Config
+	cacheURL        string
+	cachePass       string
+	cacheDB         string
 	singleUserEmail string
 	singleUserToken string
 	clientTLS       bool
 	caCerts         string
-	thingID         string
-	thingKey        string
 	channelID       string
 	natsURL         string
 
-	authnTimeout time.Duration
 	authnURL     string
+	authnTimeout time.Duration
 }
 
 func main() {
@@ -109,37 +112,34 @@ func main() {
 		log.Fatalf(err.Error())
 	}
 
+	cacheClient := connectToRedis(cfg.cacheURL, cfg.cachePass, cfg.cacheDB, logger)
+	cacheTracer, cacheCloser := initJaeger("twins_cache", cfg.jaegerURL, logger)
+	defer cacheCloser.Close()
+
 	db, err := twmongodb.Connect(cfg.dbCfg, logger)
 	if err != nil {
 		logger.Error(err.Error())
 		os.Exit(1)
 	}
-
-	authTracer, authCloser := initJaeger("auth", cfg.jaegerURL, logger)
-	defer authCloser.Close()
-
-	auth, _ := createAuthClient(cfg, authTracer, logger)
-
 	dbTracer, dbCloser := initJaeger("twins_db", cfg.jaegerURL, logger)
 	defer dbCloser.Close()
 
-	b, err := broker.New(cfg.natsURL)
+	authTracer, authCloser := initJaeger("auth", cfg.jaegerURL, logger)
+	defer authCloser.Close()
+	auth, _ := createAuthClient(cfg, authTracer, logger)
+
+	pubSub, err := nats.NewPubSub(cfg.natsURL, queue, logger)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error(fmt.Sprintf("Failed to connect to NATS: %s", err))
 		os.Exit(1)
 	}
-	defer b.Close()
+	defer pubSub.Close()
 
-	ncTracer, ncCloser := initJaeger("twins_nats", cfg.jaegerURL, logger)
-	defer ncCloser.Close()
+	svc := newService(pubSub, cfg.channelID, auth, dbTracer, db, cacheTracer, cacheClient, logger)
 
 	tracer, closer := initJaeger("twins", cfg.jaegerURL, logger)
 	defer closer.Close()
-
-	svc := newService(b, ncTracer, cfg.channelID, auth, dbTracer, db, logger)
-
 	errs := make(chan error, 2)
-
 	go startHTTPServer(twapi.MakeHandler(tracer, svc), cfg.httpPort, cfg, logger, errs)
 
 	go func() {
@@ -158,13 +158,13 @@ func loadConfig() config {
 		log.Fatalf("Invalid value passed for %s\n", envClientTLS)
 	}
 
-	timeout, err := strconv.ParseInt(mainflux.Env(envAuthnTimeout, defAuthnTimeout), 10, 64)
+	authnTimeout, err := time.ParseDuration(mainflux.Env(envAuthnTimeout, defAuthnTimeout))
 	if err != nil {
 		log.Fatalf("Invalid %s value: %s", envAuthnTimeout, err.Error())
 	}
 
 	dbCfg := twmongodb.Config{
-		Name: mainflux.Env(envDBName, defDBName),
+		Name: mainflux.Env(envDB, defDB),
 		Host: mainflux.Env(envDBHost, defDBHost),
 		Port: mainflux.Env(envDBPort, defDBPort),
 	}
@@ -176,16 +176,17 @@ func loadConfig() config {
 		serverKey:       mainflux.Env(envServerKey, defServerKey),
 		jaegerURL:       mainflux.Env(envJaegerURL, defJaegerURL),
 		dbCfg:           dbCfg,
+		cacheURL:        mainflux.Env(envCacheURL, defCacheURL),
+		cachePass:       mainflux.Env(envCachePass, defCachePass),
+		cacheDB:         mainflux.Env(envCacheDB, defCacheDB),
 		singleUserEmail: mainflux.Env(envSingleUserEmail, defSingleUserEmail),
 		singleUserToken: mainflux.Env(envSingleUserToken, defSingleUserToken),
 		clientTLS:       tls,
 		caCerts:         mainflux.Env(envCACerts, defCACerts),
-		thingID:         mainflux.Env(envThingID, defThingID),
 		channelID:       mainflux.Env(envChannelID, defChannelID),
-		thingKey:        mainflux.Env(envThingKey, defThingKey),
 		natsURL:         mainflux.Env(envNatsURL, defNatsURL),
 		authnURL:        mainflux.Env(envAuthnURL, defAuthnURL),
-		authnTimeout:    time.Duration(timeout) * time.Second,
+		authnTimeout:    authnTimeout,
 	}
 }
 
@@ -240,20 +241,39 @@ func connectToAuth(cfg config, logger logger.Logger) *grpc.ClientConn {
 
 	conn, err := grpc.Dial(cfg.authnURL, opts...)
 	if err != nil {
-		logger.Error(fmt.Sprintf("Failed to connect to auth service: %s", err))
+		logger.Error(fmt.Sprintf("Failed to connect to authn service: %s", err))
 		os.Exit(1)
 	}
 
 	return conn
 }
 
-func newService(b broker.Nats, ncTracer opentracing.Tracer, chanID string, users mainflux.AuthNServiceClient, dbTracer opentracing.Tracer, db *mongo.Database, logger logger.Logger) twins.Service {
+func connectToRedis(cacheURL, cachePass, cacheDB string, logger logger.Logger) *redis.Client {
+	db, err := strconv.Atoi(cacheDB)
+	if err != nil {
+		logger.Error(fmt.Sprintf("Failed to connect to cache: %s", err))
+		os.Exit(1)
+	}
+
+	return redis.NewClient(&redis.Options{
+		Addr:     cacheURL,
+		Password: cachePass,
+		DB:       db,
+	})
+}
+
+func newService(ps messaging.PubSub, chanID string, users mainflux.AuthNServiceClient, dbTracer opentracing.Tracer, db *mongo.Database, cacheTracer opentracing.Tracer, cacheClient *redis.Client, logger logger.Logger) twins.Service {
 	twinRepo := twmongodb.NewTwinRepository(db)
+	twinRepo = tracing.TwinRepositoryMiddleware(dbTracer, twinRepo)
 
 	stateRepo := twmongodb.NewStateRepository(db)
-	idp := uuid.New()
+	stateRepo = tracing.StateRepositoryMiddleware(dbTracer, stateRepo)
 
-	svc := twins.New(b, users, twinRepo, stateRepo, idp, chanID, logger)
+	up := uuidProvider.New()
+	twinCache := rediscache.NewTwinCache(cacheClient)
+	twinCache = tracing.TwinCacheMiddleware(cacheTracer, twinCache)
+
+	svc := twins.New(ps, users, twinRepo, twinCache, stateRepo, up, chanID, logger)
 	svc = api.LoggingMiddleware(svc, logger)
 	svc = api.MetricsMiddleware(
 		svc,
@@ -271,21 +291,17 @@ func newService(b broker.Nats, ncTracer opentracing.Tracer, chanID string, users
 		}, []string{"method"}),
 	)
 
-	_, err := b.QueueSubscribe(broker.SubjectAllChannels, queue, func(m *nats.Msg) {
-		var msg broker.Message
-		if err := proto.Unmarshal(m.Data, &msg); err != nil {
-			logger.Warn(fmt.Sprintf("Unmarshalling failed: %s", err))
-			return
-		}
-
+	err := ps.Subscribe(nats.SubjectAllChannels, func(msg messaging.Message) error {
 		if msg.Channel == chanID {
-			return
+			return nil
 		}
 
 		if err := svc.SaveStates(&msg); err != nil {
 			logger.Error(fmt.Sprintf("State save failed: %s", err))
-			return
+			return err
 		}
+
+		return nil
 	})
 	if err != nil {
 		logger.Error(err.Error())

@@ -7,7 +7,7 @@ import (
 	"log"
 
 	"github.com/mainflux/mainflux/cli"
-	"github.com/mainflux/mainflux/sdk/go"
+	sdk "github.com/mainflux/mainflux/pkg/sdk/go"
 	"github.com/spf13/cobra"
 )
 
@@ -16,10 +16,14 @@ func main() {
 	sdkConf := sdk.Config{
 		BaseURL:           "http://localhost",
 		ReaderURL:         "http://localhost:8905",
+		BootstrapURL:      "http://localhost:8202",
+		CertsURL:          "http://localhost:8204",
 		ReaderPrefix:      "",
 		UsersPrefix:       "",
+		GroupsPrefix:      "",
 		ThingsPrefix:      "",
 		HTTPAdapterPrefix: "http",
+		BootstrapPrefix:   "things",
 		MsgContentType:    sdk.ContentType(msgContentType),
 		TLSVerification:   false,
 	}
@@ -28,6 +32,8 @@ func main() {
 	var rootCmd = &cobra.Command{
 		Use: "mainflux-cli",
 		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			cli.ParseConfig()
+
 			sdkConf.MsgContentType = sdk.ContentType(msgContentType)
 			s := sdk.NewSDK(sdkConf)
 			cli.SetSDK(s)
@@ -38,17 +44,23 @@ func main() {
 	versionCmd := cli.NewVersionCmd()
 	usersCmd := cli.NewUsersCmd()
 	thingsCmd := cli.NewThingsCmd()
+	groupsCmd := cli.NewGroupsCmd()
 	channelsCmd := cli.NewChannelsCmd()
 	messagesCmd := cli.NewMessagesCmd()
 	provisionCmd := cli.NewProvisionCmd()
+	bootstrapCmd := cli.NewBootstrapCmd()
+	certsCmd := cli.NewCertsCmd()
 
 	// Root Commands
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(usersCmd)
+	rootCmd.AddCommand(groupsCmd)
 	rootCmd.AddCommand(thingsCmd)
 	rootCmd.AddCommand(channelsCmd)
 	rootCmd.AddCommand(messagesCmd)
 	rootCmd.AddCommand(provisionCmd)
+	rootCmd.AddCommand(bootstrapCmd)
+	rootCmd.AddCommand(certsCmd)
 
 	// Root Flags
 	rootCmd.PersistentFlags().StringVarP(
@@ -76,6 +88,14 @@ func main() {
 	)
 
 	rootCmd.PersistentFlags().StringVarP(
+		&sdkConf.GroupsPrefix,
+		"groups-prefix",
+		"g",
+		sdkConf.GroupsPrefix,
+		"Mainflux groups service prefix",
+	)
+
+	rootCmd.PersistentFlags().StringVarP(
 		&sdkConf.HTTPAdapterPrefix,
 		"http-prefix",
 		"a",
@@ -97,6 +117,27 @@ func main() {
 		"i",
 		sdkConf.TLSVerification,
 		"Do not check for TLS cert",
+	)
+
+	rootCmd.PersistentFlags().StringVar(
+		&cli.UserAuthToken,
+		"user-auth-token",
+		"",
+		"Mainflux user auth token",
+	)
+
+	rootCmd.PersistentFlags().StringVar(
+		&cli.ConfigPath,
+		"config",
+		"",
+		"Mainflux config path",
+	)
+
+	rootCmd.PersistentFlags().BoolVar(
+		&cli.RawOutput,
+		"raw",
+		false,
+		"Enables raw output mode for easier parsing of output",
 	)
 
 	// Client and Channels Flags

@@ -9,8 +9,8 @@ import (
 	"html/template"
 	"net/smtp"
 
-	"github.com/mainflux/mainflux/errors"
 	"github.com/mainflux/mainflux/logger"
+	"github.com/mainflux/mainflux/pkg/errors"
 )
 
 var (
@@ -60,7 +60,7 @@ func New(c *Config) (*Agent, error) {
 
 	tmpl, err := template.ParseFiles(c.Template)
 	if err != nil {
-		return nil, errors.Wrap(errParseTemplate, err)
+		return a, errors.Wrap(errParseTemplate, err)
 	}
 	a.tmpl = tmpl
 	return a, nil

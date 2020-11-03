@@ -86,12 +86,12 @@ func (es eventStore) ViewThing(ctx context.Context, token, id string) (things.Th
 	return es.svc.ViewThing(ctx, token, id)
 }
 
-func (es eventStore) ListThings(ctx context.Context, token string, offset, limit uint64, name string, metadata things.Metadata) (things.ThingsPage, error) {
+func (es eventStore) ListThings(ctx context.Context, token string, offset, limit uint64, name string, metadata things.Metadata) (things.Page, error) {
 	return es.svc.ListThings(ctx, token, offset, limit, name, metadata)
 }
 
-func (es eventStore) ListThingsByChannel(ctx context.Context, token, id string, offset, limit uint64) (things.ThingsPage, error) {
-	return es.svc.ListThingsByChannel(ctx, token, id, offset, limit)
+func (es eventStore) ListThingsByChannel(ctx context.Context, token, id string, offset, limit uint64, connected bool) (things.Page, error) {
+	return es.svc.ListThingsByChannel(ctx, token, id, offset, limit, connected)
 }
 
 func (es eventStore) RemoveThing(ctx context.Context, token, id string) error {
@@ -164,8 +164,8 @@ func (es eventStore) ListChannels(ctx context.Context, token string, offset, lim
 	return es.svc.ListChannels(ctx, token, offset, limit, name, metadata)
 }
 
-func (es eventStore) ListChannelsByThing(ctx context.Context, token, id string, offset, limit uint64) (things.ChannelsPage, error) {
-	return es.svc.ListChannelsByThing(ctx, token, id, offset, limit)
+func (es eventStore) ListChannelsByThing(ctx context.Context, token, id string, offset, limit uint64, connected bool) (things.ChannelsPage, error) {
+	return es.svc.ListChannelsByThing(ctx, token, id, offset, limit, connected)
 }
 
 func (es eventStore) RemoveChannel(ctx context.Context, token, id string) error {

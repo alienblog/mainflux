@@ -11,10 +11,10 @@ import (
 
 	opcuaGopcua "github.com/gopcua/opcua"
 	uaGopcua "github.com/gopcua/opcua/ua"
-	"github.com/mainflux/mainflux/broker"
-	"github.com/mainflux/mainflux/errors"
 	"github.com/mainflux/mainflux/logger"
 	"github.com/mainflux/mainflux/opcua"
+	"github.com/mainflux/mainflux/pkg/errors"
+	"github.com/mainflux/mainflux/pkg/messaging"
 )
 
 const protocol = "opcua"
@@ -40,7 +40,7 @@ var _ opcua.Subscriber = (*client)(nil)
 
 type client struct {
 	ctx        context.Context
-	broker     broker.Nats
+	publisher  messaging.Publisher
 	thingsRM   opcua.RouteMapRepository
 	channelsRM opcua.RouteMapRepository
 	connectRM  opcua.RouteMapRepository
@@ -57,10 +57,10 @@ type message struct {
 }
 
 // NewSubscriber returns new OPC-UA client instance.
-func NewSubscriber(ctx context.Context, broker broker.Nats, thingsRM, channelsRM, connectRM opcua.RouteMapRepository, log logger.Logger) opcua.Subscriber {
+func NewSubscriber(ctx context.Context, publisher messaging.Publisher, thingsRM, channelsRM, connectRM opcua.RouteMapRepository, log logger.Logger) opcua.Subscriber {
 	return client{
 		ctx:        ctx,
-		broker:     broker,
+		publisher:  publisher,
 		thingsRM:   thingsRM,
 		channelsRM: channelsRM,
 		connectRM:  connectRM,
@@ -227,16 +227,17 @@ func (c client) publish(token string, m message) error {
 	// Publish on Mainflux NATS broker
 	SenML := fmt.Sprintf(`[{"n":"%s", "t": %d, "%s":%v}]`, m.Type, m.Time, m.DataKey, m.Data)
 	payload := []byte(SenML)
-	msg := broker.Message{
-		Publisher:   thingID,
-		Protocol:    protocol,
-		ContentType: "Content-Type",
-		Channel:     chanID,
-		Payload:     payload,
-		Subtopic:    m.NodeID,
+
+	msg := messaging.Message{
+		Publisher: thingID,
+		Protocol:  protocol,
+		Channel:   chanID,
+		Payload:   payload,
+		Subtopic:  m.NodeID,
+		Created:   time.Now().UnixNano(),
 	}
 
-	if err := c.broker.Publish(c.ctx, token, msg); err != nil {
+	if err := c.publisher.Publish(msg.Channel, msg); err != nil {
 		return err
 	}
 

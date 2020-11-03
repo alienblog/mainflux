@@ -12,13 +12,14 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	kitot "github.com/go-kit/kit/tracing/opentracing"
 	kithttp "github.com/go-kit/kit/transport/http"
 	"github.com/go-zoo/bone"
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/broker"
 	adapter "github.com/mainflux/mainflux/http"
+	"github.com/mainflux/mainflux/pkg/messaging"
 	"github.com/mainflux/mainflux/things"
 	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -108,13 +109,12 @@ func decodeRequest(ctx context.Context, r *http.Request) (interface{}, error) {
 		return nil, err
 	}
 
-	ct := r.Header.Get("Content-Type")
-	msg := broker.Message{
-		Protocol:    protocol,
-		ContentType: ct,
-		Channel:     chanID,
-		Subtopic:    subtopic,
-		Payload:     payload,
+	msg := messaging.Message{
+		Protocol: protocol,
+		Channel:  chanID,
+		Subtopic: subtopic,
+		Payload:  payload,
+		Created:  time.Now().UnixNano(),
 	}
 
 	req := publishReq{

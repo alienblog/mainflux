@@ -30,14 +30,23 @@ const (
 type Key struct {
 	ID        string
 	Type      uint32
-	Issuer    string
-	Secret    string
+	IssuerID  string
+	Subject   string
 	IssuedAt  time.Time
 	ExpiresAt time.Time
 }
 
+// Identity contains ID and Email.
+type Identity struct {
+	ID    string
+	Email string
+}
+
 // Expired verifies if the key is expired.
 func (k Key) Expired() bool {
+	if k.Type == APIKey && k.ExpiresAt.IsZero() {
+		return false
+	}
 	return k.ExpiresAt.UTC().Before(time.Now().UTC())
 }
 

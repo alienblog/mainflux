@@ -13,7 +13,7 @@ import (
 	"path/filepath"
 
 	"github.com/docker/docker/pkg/namesgenerator"
-	mfxsdk "github.com/mainflux/mainflux/sdk/go"
+	mfxsdk "github.com/mainflux/mainflux/pkg/sdk/go"
 	"github.com/spf13/cobra"
 )
 
@@ -124,7 +124,7 @@ var cmdProvision = []cobra.Command{
 				Email:    un,
 				Password: "12345678",
 			}
-			if err := sdk.CreateUser(user); err != nil {
+			if _, err := sdk.CreateUser(user); err != nil {
 				logError(err)
 				return
 			}

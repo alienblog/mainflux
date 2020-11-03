@@ -8,20 +8,11 @@ import (
 	"fmt"
 
 	"github.com/go-redis/redis"
-	"github.com/mainflux/mainflux/errors"
+	"github.com/mainflux/mainflux/pkg/errors"
 	"github.com/mainflux/mainflux/things"
 )
 
 const chanPrefix = "channel"
-
-// ErrRedisConnectChannel indicates error while adding connection in redis cache
-var ErrRedisConnectChannel = errors.New("add connection to redis cache error")
-
-// ErrRedisDisconnectChannel indicates error while removing connection from redis cache
-var ErrRedisDisconnectChannel = errors.New("remove connection from redis cache error")
-
-// ErrRedisRemoveChannel indicates error while removing channel from redis cache
-var ErrRedisRemoveChannel = errors.New("remove channel from redis cache error")
 
 var _ things.ChannelCache = (*channelCache)(nil)
 
@@ -37,7 +28,7 @@ func NewChannelCache(client *redis.Client) things.ChannelCache {
 func (cc channelCache) Connect(_ context.Context, chanID, thingID string) error {
 	cid, tid := kv(chanID, thingID)
 	if err := cc.client.SAdd(cid, tid).Err(); err != nil {
-		return errors.Wrap(ErrRedisConnectChannel, err)
+		return errors.Wrap(things.ErrConnect, err)
 	}
 	return nil
 }
@@ -50,7 +41,7 @@ func (cc channelCache) HasThing(_ context.Context, chanID, thingID string) bool 
 func (cc channelCache) Disconnect(_ context.Context, chanID, thingID string) error {
 	cid, tid := kv(chanID, thingID)
 	if err := cc.client.SRem(cid, tid).Err(); err != nil {
-		return errors.Wrap(ErrRedisDisconnectChannel, err)
+		return errors.Wrap(things.ErrDisconnect, err)
 	}
 	return nil
 }
@@ -58,7 +49,7 @@ func (cc channelCache) Disconnect(_ context.Context, chanID, thingID string) err
 func (cc channelCache) Remove(_ context.Context, chanID string) error {
 	cid, _ := kv(chanID, "0")
 	if err := cc.client.Del(cid).Err(); err != nil {
-		return errors.Wrap(ErrRedisRemoveChannel, err)
+		return errors.Wrap(things.ErrRemoveEntity, err)
 	}
 	return nil
 }

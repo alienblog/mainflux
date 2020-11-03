@@ -1,26 +1,36 @@
 package mqtt
 
 import (
+	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 
 	"github.com/mainflux/mainflux/logger"
+	"github.com/mainflux/mainflux/pkg/errors"
 	"github.com/mainflux/mproxy/pkg/session"
+	mptls "github.com/mainflux/mproxy/pkg/tls"
+)
+
+var (
+	errCreateListener = errors.New("failed creating TLS listener")
 )
 
 // Proxy is main MQTT proxy struct
 type Proxy struct {
 	address string
 	target  string
-	event   session.Event
+	handler session.Handler
 	logger  logger.Logger
+	dialer  net.Dialer
 }
 
-func New(address, target string, event session.Event, logger logger.Logger) *Proxy {
+// New returns a new mqtt Proxy instance.
+func New(address, target string, handler session.Handler, logger logger.Logger) *Proxy {
 	return &Proxy{
 		address: address,
 		target:  target,
-		event:   event,
+		handler: handler,
 		logger:  logger,
 	}
 }
@@ -34,29 +44,34 @@ func (p Proxy) accept(l net.Listener) {
 		}
 
 		p.logger.Info("Accepted new client")
-		go p.handleConnection(conn)
+		go p.handle(conn)
 	}
 }
 
-func (p Proxy) handleConnection(inbound net.Conn) {
-	defer inbound.Close()
-
-	outbound, err := net.Dial("tcp", p.target)
+func (p Proxy) handle(inbound net.Conn) {
+	defer p.close(inbound)
+	outbound, err := p.dialer.Dial("tcp", p.target)
 	if err != nil {
-		p.logger.Error("Cannot connect to remote broker " + p.target)
+		p.logger.Error("Cannot connect to remote broker " + p.target + " due to: " + err.Error())
 		return
 	}
-	defer outbound.Close()
+	defer p.close(outbound)
 
-	c := session.New(inbound, outbound, p.event, p.logger)
+	clientCert, err := mptls.ClientCert(inbound)
+	if err != nil {
+		p.logger.Error("Failed to get client certificate: " + err.Error())
+		return
+	}
 
-	if err := c.Stream(); err != io.EOF {
-		p.logger.Warn("Broken connection for client: " + c.Client.ID + " with error: " + err.Error())
+	s := session.New(inbound, outbound, p.handler, p.logger, clientCert)
+
+	if err = s.Stream(); !errors.Contains(err, io.EOF) {
+		p.logger.Warn("Broken connection for client: " + s.Client.ID + " with error: " + err.Error())
 	}
 }
 
-// Proxy of the server, this will block.
-func (p Proxy) Proxy() error {
+// Listen of the server, this will block.
+func (p Proxy) Listen() error {
 	l, err := net.Listen("tcp", p.address)
 	if err != nil {
 		return err
@@ -68,4 +83,26 @@ func (p Proxy) Proxy() error {
 
 	p.logger.Info("Server Exiting...")
 	return nil
+}
+
+// ListenTLS - version of Listen with TLS encryption
+func (p Proxy) ListenTLS(tlsCfg *tls.Config) error {
+
+	l, err := tls.Listen("tcp", p.address, tlsCfg)
+	if err != nil {
+		return errors.Wrap(errCreateListener, err)
+	}
+	defer l.Close()
+
+	// Acceptor loop
+	p.accept(l)
+
+	p.logger.Info("Server Exiting...")
+	return nil
+}
+
+func (p Proxy) close(conn net.Conn) {
+	if err := conn.Close(); err != nil {
+		p.logger.Warn(fmt.Sprintf("Error closing connection %s", err.Error()))
+	}
 }

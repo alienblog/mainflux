@@ -22,7 +22,7 @@ import (
 	"github.com/mainflux/mainflux/bootstrap"
 	bsapi "github.com/mainflux/mainflux/bootstrap/api"
 	"github.com/mainflux/mainflux/bootstrap/mocks"
-	mfsdk "github.com/mainflux/mainflux/sdk/go"
+	mfsdk "github.com/mainflux/mainflux/pkg/sdk/go"
 	"github.com/mainflux/mainflux/things"
 	thingsapi "github.com/mainflux/mainflux/things/api/things/http"
 	"github.com/opentracing/opentracing-go/mocktracer"
@@ -79,7 +79,7 @@ var (
 		CACert:     "newca",
 	}
 
-	notFoundRes          = toJSON(errorRes{bootstrap.ErrNotFound.Error()})
+	bsErrorRes           = toJSON(errorRes{bootstrap.ErrBootstrap.Error()})
 	unauthRes            = toJSON(errorRes{bootstrap.ErrUnauthorizedAccess.Error()})
 	malformedRes         = toJSON(errorRes{bootstrap.ErrMalformedEntity.Error()})
 	extKeyNotFoundRes    = toJSON(errorRes{bootstrap.ErrExternalKeyNotFound.Error()})
@@ -156,8 +156,8 @@ func dec(in []byte) ([]byte, error) {
 	return in, nil
 }
 
-func newService(authn mainflux.AuthNServiceClient, unknown map[string]string, url string) bootstrap.Service {
-	things := mocks.NewConfigsRepository(unknown)
+func newService(authn mainflux.AuthNServiceClient, url string) bootstrap.Service {
+	things := mocks.NewConfigsRepository()
 	config := mfsdk.Config{
 		BaseURL: url,
 	}
@@ -202,7 +202,7 @@ func TestAdd(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	data := toJSON(addReq)
@@ -326,7 +326,7 @@ func TestView(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 	c := newConfig([]bootstrap.Channel{})
 
@@ -423,7 +423,7 @@ func TestUpdate(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	c := newConfig([]bootstrap.Channel{bootstrap.Channel{ID: "1"}})
@@ -517,7 +517,7 @@ func TestUpdateCert(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	c := newConfig([]bootstrap.Channel{bootstrap.Channel{ID: "1"}})
@@ -612,7 +612,7 @@ func TestUpdateConnections(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	c := newConfig([]bootstrap.Channel{bootstrap.Channel{ID: "1"}})
@@ -724,7 +724,7 @@ func TestList(t *testing.T) {
 
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 	path := fmt.Sprintf("%s/%s", bs.URL, "things/configs")
 
@@ -973,7 +973,7 @@ func TestRemove(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	c := newConfig([]bootstrap.Channel{bootstrap.Channel{ID: "1"}})
@@ -1031,108 +1031,11 @@ func TestRemove(t *testing.T) {
 	}
 }
 
-func TestListUnknown(t *testing.T) {
-	unknownNum := 10
-	unknown := make([]config, unknownNum)
-	unknownConfigs := make(map[string]string, unknownNum)
-	// Save some unknown elements.
-	for i := 0; i < unknownNum; i++ {
-		u := config{
-			ExternalID:  fmt.Sprintf("key-%s", strconv.Itoa(i)),
-			ExternalKey: fmt.Sprintf("%s%s", addExternalKey, strconv.Itoa(i)),
-		}
-		unknownConfigs[u.ExternalID] = u.ExternalKey
-		unknown[i] = u
-	}
-
-	users := mocks.NewUsersService(map[string]string{validToken: email})
-	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, unknownConfigs, ts.URL)
-	bs := newBootstrapServer(svc)
-	path := fmt.Sprintf("%s/%s", bs.URL, "things/unknown/configs")
-
-	cases := []struct {
-		desc   string
-		auth   string
-		url    string
-		status int
-		res    []config
-	}{
-		{
-			desc:   "view unknown unauthorized",
-			auth:   invalidToken,
-			url:    fmt.Sprintf("%s?offset=%d&limit=%d", path, 0, 5),
-			status: http.StatusForbidden,
-			res:    nil,
-		},
-		{
-			desc:   "view unknown with an empty token",
-			auth:   "",
-			url:    fmt.Sprintf("%s?offset=%d&limit=%d", path, 0, 5),
-			status: http.StatusForbidden,
-			res:    nil,
-		},
-		{
-			desc:   "view unknown with limit < 0",
-			auth:   validToken,
-			url:    fmt.Sprintf("%s?offset=%d&limit=%d", path, 0, -5),
-			status: http.StatusBadRequest,
-			res:    nil,
-		},
-		{
-			desc:   "view unknown with offset < 0",
-			auth:   validToken,
-			url:    fmt.Sprintf("%s?offset=%d&limit=%d", path, -3, 5),
-			status: http.StatusBadRequest,
-			res:    nil,
-		},
-		{
-			desc:   "view unknown with invalid query params",
-			auth:   validToken,
-			url:    fmt.Sprintf("%s?offset=%d&limit=%d&key=%%", path, 0, -5),
-			status: http.StatusBadRequest,
-			res:    nil,
-		},
-		{
-			desc:   "view a list of unknown",
-			auth:   validToken,
-			url:    fmt.Sprintf("%s?offset=%d&limit=%d", path, 0, 5),
-			status: http.StatusOK,
-			res:    unknown[:5],
-		},
-		{
-			desc:   "view unknown with no page paremeters",
-			auth:   validToken,
-			url:    fmt.Sprintf("%s", path),
-			status: http.StatusOK,
-			res:    unknown[:10],
-		},
-	}
-
-	for _, tc := range cases {
-		req := testRequest{
-			client: bs.Client(),
-			method: http.MethodGet,
-			url:    tc.url,
-			token:  tc.auth,
-		}
-		res, err := req.make()
-		assert.Nil(t, err, fmt.Sprintf("%s: unexpected error %s", tc.desc, err))
-
-		assert.Equal(t, tc.status, res.StatusCode, fmt.Sprintf("%s: expected status code %d got %d", tc.desc, tc.status, res.StatusCode))
-		var body map[string][]config
-
-		json.NewDecoder(res.Body).Decode(&body)
-		assert.Nil(t, err, fmt.Sprintf("%s: unexpected error %s", tc.desc, err))
-		assert.ElementsMatch(t, tc.res, body["configs"], fmt.Sprintf("%s: expected response '%s' got '%s'", tc.desc, tc.res, body["configs"]))
-	}
-}
-
 func TestBootstrap(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, map[string]string{}, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	c := newConfig([]bootstrap.Channel{bootstrap.Channel{ID: "1"}})
@@ -1169,68 +1072,68 @@ func TestBootstrap(t *testing.T) {
 	data := toJSON(s)
 
 	cases := []struct {
-		desc         string
-		external_id  string
-		external_key string
-		status       int
-		res          string
-		secure       bool
+		desc        string
+		externalID  string
+		externalKey string
+		status      int
+		res         string
+		secure      bool
 	}{
 		{
-			desc:         "bootstrap a Thing with unknown ID",
-			external_id:  unknown,
-			external_key: c.ExternalKey,
-			status:       http.StatusNotFound,
-			res:          notFoundRes,
-			secure:       false,
+			desc:        "bootstrap a Thing with unknown ID",
+			externalID:  unknown,
+			externalKey: c.ExternalKey,
+			status:      http.StatusNotFound,
+			res:         bsErrorRes,
+			secure:      false,
 		},
 		{
-			desc:         "bootstrap a Thing with an empty ID",
-			external_id:  "",
-			external_key: c.ExternalKey,
-			status:       http.StatusBadRequest,
-			res:          malformedRes,
-			secure:       false,
+			desc:        "bootstrap a Thing with an empty ID",
+			externalID:  "",
+			externalKey: c.ExternalKey,
+			status:      http.StatusBadRequest,
+			res:         malformedRes,
+			secure:      false,
 		},
 		{
-			desc:         "bootstrap a Thing with unknown key",
-			external_id:  c.ExternalID,
-			external_key: unknown,
-			status:       http.StatusNotFound,
-			res:          extKeyNotFoundRes,
-			secure:       false,
+			desc:        "bootstrap a Thing with unknown key",
+			externalID:  c.ExternalID,
+			externalKey: unknown,
+			status:      http.StatusNotFound,
+			res:         extKeyNotFoundRes,
+			secure:      false,
 		},
 		{
-			desc:         "bootstrap a Thing with an empty key",
-			external_id:  c.ExternalID,
-			external_key: "",
-			status:       http.StatusForbidden,
-			res:          unauthRes,
-			secure:       false,
+			desc:        "bootstrap a Thing with an empty key",
+			externalID:  c.ExternalID,
+			externalKey: "",
+			status:      http.StatusForbidden,
+			res:         unauthRes,
+			secure:      false,
 		},
 		{
-			desc:         "bootstrap known Thing",
-			external_id:  c.ExternalID,
-			external_key: c.ExternalKey,
-			status:       http.StatusOK,
-			res:          data,
-			secure:       false,
+			desc:        "bootstrap known Thing",
+			externalID:  c.ExternalID,
+			externalKey: c.ExternalKey,
+			status:      http.StatusOK,
+			res:         data,
+			secure:      false,
 		},
 		{
-			desc:         "bootstrap secure",
-			external_id:  fmt.Sprintf("secure/%s", c.ExternalID),
-			external_key: hex.EncodeToString(encExternKey),
-			status:       http.StatusOK,
-			res:          data,
-			secure:       true,
+			desc:        "bootstrap secure",
+			externalID:  fmt.Sprintf("secure/%s", c.ExternalID),
+			externalKey: hex.EncodeToString(encExternKey),
+			status:      http.StatusOK,
+			res:         data,
+			secure:      true,
 		},
 		{
-			desc:         "bootstrap secure with unencrypted key",
-			external_id:  fmt.Sprintf("secure/%s", c.ExternalID),
-			external_key: c.ExternalKey,
-			status:       http.StatusNotFound,
-			res:          extSecKeyNotFoundRes,
-			secure:       true,
+			desc:        "bootstrap secure with unencrypted key",
+			externalID:  fmt.Sprintf("secure/%s", c.ExternalID),
+			externalKey: c.ExternalKey,
+			status:      http.StatusNotFound,
+			res:         extSecKeyNotFoundRes,
+			secure:      true,
 		},
 	}
 
@@ -1238,8 +1141,8 @@ func TestBootstrap(t *testing.T) {
 		req := testRequest{
 			client: bs.Client(),
 			method: http.MethodGet,
-			url:    fmt.Sprintf("%s/things/bootstrap/%s", bs.URL, tc.external_id),
-			token:  tc.external_key,
+			url:    fmt.Sprintf("%s/things/bootstrap/%s", bs.URL, tc.externalID),
+			token:  tc.externalKey,
 		}
 		res, err := req.make()
 		assert.Nil(t, err, fmt.Sprintf("%s: unexpected error %s", tc.desc, err))
@@ -1260,7 +1163,7 @@ func TestChangeState(t *testing.T) {
 	users := mocks.NewUsersService(map[string]string{validToken: email})
 
 	ts := newThingsServer(newThingsService(users))
-	svc := newService(users, nil, ts.URL)
+	svc := newService(users, ts.URL)
 	bs := newBootstrapServer(svc)
 
 	c := newConfig([]bootstrap.Channel{bootstrap.Channel{ID: "1"}})

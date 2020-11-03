@@ -12,7 +12,8 @@ import (
 	"time"
 
 	r "github.com/go-redis/redis"
-	"github.com/mainflux/mainflux/errors"
+	"github.com/mainflux/mainflux/pkg/errors"
+	"github.com/mainflux/mainflux/pkg/uuid"
 	"github.com/mainflux/mainflux/things"
 	"github.com/mainflux/mainflux/things/mocks"
 	"github.com/mainflux/mainflux/things/redis"
@@ -44,9 +45,9 @@ func newService(tokens map[string]string) things.Service {
 	channelsRepo := mocks.NewChannelRepository(thingsRepo, conns)
 	chanCache := mocks.NewChannelCache()
 	thingCache := mocks.NewThingCache()
-	idp := mocks.NewIdentityProvider()
+	uuidProvider := uuid.NewMock()
 
-	return things.New(auth, thingsRepo, channelsRepo, chanCache, thingCache, idp)
+	return things.New(auth, thingsRepo, channelsRepo, chanCache, thingCache, uuidProvider)
 }
 
 func TestCreateThings(t *testing.T) {
@@ -90,7 +91,7 @@ func TestCreateThings(t *testing.T) {
 	lastID := "0"
 	for _, tc := range cases {
 		_, err := svc.CreateThings(context.Background(), tc.key, tc.ths...)
-		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
+		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&r.XReadArgs{
 			Streams: []string{streamID, lastID},
@@ -149,8 +150,7 @@ func TestUpdateThing(t *testing.T) {
 	lastID := "0"
 	for _, tc := range cases {
 		err := svc.UpdateThing(context.Background(), tc.key, tc.thing)
-		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
-
+		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 		streams := redisClient.XRead(&r.XReadArgs{
 			Streams: []string{streamID, lastID},
 			Count:   1,
@@ -214,8 +214,8 @@ func TestListThingsByChannel(t *testing.T) {
 	require.Nil(t, err, fmt.Sprintf("unexpected error %s", err))
 
 	essvc := redis.NewEventStoreMiddleware(svc, redisClient)
-	esths, eserr := essvc.ListThingsByChannel(context.Background(), token, sch.ID, 0, 10)
-	thps, err := svc.ListThingsByChannel(context.Background(), token, sch.ID, 0, 10)
+	esths, eserr := essvc.ListThingsByChannel(context.Background(), token, sch.ID, 0, 10, true)
+	thps, err := svc.ListThingsByChannel(context.Background(), token, sch.ID, 0, 10, true)
 	assert.Equal(t, thps, esths, fmt.Sprintf("event sourcing changed service behaviour: expected %v got %v", thps, esths))
 	assert.Equal(t, err, eserr, fmt.Sprintf("event sourcing changed service behaviour: expected %v got %v", err, eserr))
 }
@@ -317,7 +317,7 @@ func TestCreateChannels(t *testing.T) {
 	lastID := "0"
 	for _, tc := range cases {
 		_, err := svc.CreateChannels(context.Background(), tc.key, tc.chs...)
-		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
+		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&r.XReadArgs{
 			Streams: []string{streamID, lastID},
@@ -385,7 +385,7 @@ func TestUpdateChannel(t *testing.T) {
 	lastID := "0"
 	for _, tc := range cases {
 		err := svc.UpdateChannel(context.Background(), tc.key, tc.channel)
-		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
+		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&r.XReadArgs{
 			Streams: []string{streamID, lastID},
@@ -450,8 +450,8 @@ func TestListChannelsByThing(t *testing.T) {
 	require.Nil(t, err, fmt.Sprintf("unexpected error %s", err))
 
 	essvc := redis.NewEventStoreMiddleware(svc, redisClient)
-	eschs, eserr := essvc.ListChannelsByThing(context.Background(), token, sth.ID, 0, 10)
-	chps, err := svc.ListChannelsByThing(context.Background(), token, sth.ID, 0, 10)
+	eschs, eserr := essvc.ListChannelsByThing(context.Background(), token, sth.ID, 0, 10, true)
+	chps, err := svc.ListChannelsByThing(context.Background(), token, sth.ID, 0, 10, true)
 	assert.Equal(t, chps, eschs, fmt.Sprintf("event sourcing changed service behaviour: expected %v got %v", chps, eschs))
 	assert.Equal(t, err, eserr, fmt.Sprintf("event sourcing changed service behaviour: expected %v got %v", err, eserr))
 }
@@ -496,7 +496,7 @@ func TestRemoveChannel(t *testing.T) {
 	lastID := "0"
 	for _, tc := range cases {
 		err := svc.RemoveChannel(context.Background(), tc.key, tc.id)
-		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
+		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&r.XReadArgs{
 			Streams: []string{streamID, lastID},

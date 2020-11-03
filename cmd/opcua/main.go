@@ -15,27 +15,27 @@ import (
 
 	r "github.com/go-redis/redis"
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/broker"
 	"github.com/mainflux/mainflux/logger"
 	"github.com/mainflux/mainflux/opcua"
 	"github.com/mainflux/mainflux/opcua/api"
 	"github.com/mainflux/mainflux/opcua/db"
 	"github.com/mainflux/mainflux/opcua/gopcua"
 	"github.com/mainflux/mainflux/opcua/redis"
+	"github.com/mainflux/mainflux/pkg/messaging/nats"
 
 	kitprometheus "github.com/go-kit/kit/metrics/prometheus"
 	stdprometheus "github.com/prometheus/client_golang/prometheus"
 )
 
 const (
-	defHTTPPort       = "8188"
+	defLogLevel       = "error"
+	defHTTPPort       = "8180"
 	defOPCIntervalMs  = "1000"
 	defOPCPolicy      = ""
 	defOPCMode        = ""
 	defOPCCertFile    = ""
 	defOPCKeyFile     = ""
-	defNatsURL        = mainflux.DefNatsURL
-	defLogLevel       = "debug"
+	defNatsURL        = "nats://localhost:4222"
 	defESURL          = "localhost:6379"
 	defESPass         = ""
 	defESDB           = "0"
@@ -44,8 +44,8 @@ const (
 	defRouteMapPass   = ""
 	defRouteMapDB     = "0"
 
-	envHTTPPort       = "MF_OPCUA_ADAPTER_HTTP_PORT"
 	envLogLevel       = "MF_OPCUA_ADAPTER_LOG_LEVEL"
+	envHTTPPort       = "MF_OPCUA_ADAPTER_HTTP_PORT"
 	envOPCIntervalMs  = "MF_OPCUA_ADAPTER_INTERVAL_MS"
 	envOPCPolicy      = "MF_OPCUA_ADAPTER_POLICY"
 	envOPCMode        = "MF_OPCUA_ADAPTER_MODE"
@@ -97,15 +97,15 @@ func main() {
 	esConn := connectToRedis(cfg.esURL, cfg.esPass, cfg.esDB, logger)
 	defer esConn.Close()
 
-	b, err := broker.New(cfg.natsURL)
+	pubSub, err := nats.NewPubSub(cfg.natsURL, "", logger)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error(fmt.Sprintf("Failed to connect to NATS: %s", err))
 		os.Exit(1)
 	}
-	defer b.Close()
+	defer pubSub.Close()
 
 	ctx := context.Background()
-	sub := gopcua.NewSubscriber(ctx, b, thingRM, chanRM, connRM, logger)
+	sub := gopcua.NewSubscriber(ctx, pubSub, thingRM, chanRM, connRM, logger)
 	browser := gopcua.NewBrowser(ctx, logger)
 
 	svc := opcua.New(sub, browser, thingRM, chanRM, connRM, cfg.opcuaConfig, logger)

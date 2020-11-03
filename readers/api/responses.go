@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/transformers/senml"
+	"github.com/mainflux/mainflux/pkg/transformers/senml"
 )
 
 var _ mainflux.Response = (*pageRes)(nil)
@@ -29,4 +29,8 @@ func (res pageRes) Code() int {
 
 func (res pageRes) Empty() bool {
 	return false
+}
+
+type errorRes struct {
+	Err string `json:"error"`
 }

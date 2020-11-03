@@ -16,9 +16,9 @@ import (
 	kitprometheus "github.com/go-kit/kit/metrics/prometheus"
 	"github.com/gocql/gocql"
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/broker"
 	"github.com/mainflux/mainflux/logger"
-	"github.com/mainflux/mainflux/transformers/senml"
+	"github.com/mainflux/mainflux/pkg/messaging/nats"
+	"github.com/mainflux/mainflux/pkg/transformers/senml"
 	"github.com/mainflux/mainflux/writers"
 	"github.com/mainflux/mainflux/writers/api"
 	"github.com/mainflux/mainflux/writers/cassandra"
@@ -29,33 +29,36 @@ const (
 	svcName = "cassandra-writer"
 	sep     = ","
 
-	defNatsURL         = mainflux.DefNatsURL
+	defNatsURL         = "nats://localhost:4222"
 	defLogLevel        = "error"
 	defPort            = "8180"
 	defCluster         = "127.0.0.1"
 	defKeyspace        = "mainflux"
-	defDBUsername      = ""
-	defDBPassword      = ""
+	defDBUser          = "mainflux"
+	defDBPass          = "mainflux"
 	defDBPort          = "9042"
 	defSubjectsCfgPath = "/config/subjects.toml"
+	defContentType     = "application/senml+json"
 
 	envNatsURL         = "MF_NATS_URL"
 	envLogLevel        = "MF_CASSANDRA_WRITER_LOG_LEVEL"
 	envPort            = "MF_CASSANDRA_WRITER_PORT"
 	envCluster         = "MF_CASSANDRA_WRITER_DB_CLUSTER"
 	envKeyspace        = "MF_CASSANDRA_WRITER_DB_KEYSPACE"
-	envDBUsername      = "MF_CASSANDRA_WRITER_DB_USERNAME"
-	envDBPassword      = "MF_CASSANDRA_WRITER_DB_PASSWORD"
+	envDBUser          = "MF_CASSANDRA_WRITER_DB_USER"
+	envDBPass          = "MF_CASSANDRA_WRITER_DB_PASS"
 	envDBPort          = "MF_CASSANDRA_WRITER_DB_PORT"
 	envSubjectsCfgPath = "MF_CASSANDRA_WRITER_SUBJECTS_CONFIG"
+	envContentType     = "MF_CASSANDRA_WRITER_CONTENT_TYPE"
 )
 
 type config struct {
 	natsURL         string
 	logLevel        string
 	port            string
-	dbCfg           cassandra.DBConfig
 	subjectsCfgPath string
+	contentType     string
+	dbCfg           cassandra.DBConfig
 }
 
 func main() {
@@ -66,19 +69,19 @@ func main() {
 		log.Fatalf(err.Error())
 	}
 
-	b, err := broker.New(cfg.natsURL)
+	pubSub, err := nats.NewPubSub(cfg.natsURL, "", logger)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error(fmt.Sprintf("Failed to connect to NATS: %s", err))
 		os.Exit(1)
 	}
-	defer b.Close()
+	defer pubSub.Close()
 
 	session := connectToCassandra(cfg.dbCfg, logger)
 	defer session.Close()
 
 	repo := newService(session, logger)
-	st := senml.New()
-	if err := writers.Start(b, repo, st, svcName, cfg.subjectsCfgPath, logger); err != nil {
+	st := senml.New(cfg.contentType)
+	if err := writers.Start(pubSub, repo, st, svcName, cfg.subjectsCfgPath, logger); err != nil {
 		logger.Error(fmt.Sprintf("Failed to create Cassandra writer: %s", err))
 	}
 
@@ -105,8 +108,8 @@ func loadConfig() config {
 	dbCfg := cassandra.DBConfig{
 		Hosts:    strings.Split(mainflux.Env(envCluster, defCluster), sep),
 		Keyspace: mainflux.Env(envKeyspace, defKeyspace),
-		Username: mainflux.Env(envDBUsername, defDBUsername),
-		Password: mainflux.Env(envDBPassword, defDBPassword),
+		User:     mainflux.Env(envDBUser, defDBUser),
+		Pass:     mainflux.Env(envDBPass, defDBPass),
 		Port:     dbPort,
 	}
 
@@ -114,8 +117,9 @@ func loadConfig() config {
 		natsURL:         mainflux.Env(envNatsURL, defNatsURL),
 		logLevel:        mainflux.Env(envLogLevel, defLogLevel),
 		port:            mainflux.Env(envPort, defPort),
-		dbCfg:           dbCfg,
 		subjectsCfgPath: mainflux.Env(envSubjectsCfgPath, defSubjectsCfgPath),
+		contentType:     mainflux.Env(envContentType, defContentType),
+		dbCfg:           dbCfg,
 	}
 }
 

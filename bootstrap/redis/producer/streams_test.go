@@ -13,13 +13,13 @@ import (
 
 	"github.com/go-redis/redis"
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/errors"
+	"github.com/mainflux/mainflux/pkg/errors"
 	"github.com/opentracing/opentracing-go/mocktracer"
 
 	"github.com/mainflux/mainflux/bootstrap"
 	"github.com/mainflux/mainflux/bootstrap/mocks"
 	"github.com/mainflux/mainflux/bootstrap/redis/producer"
-	mfsdk "github.com/mainflux/mainflux/sdk/go"
+	mfsdk "github.com/mainflux/mainflux/pkg/sdk/go"
 	"github.com/mainflux/mainflux/things"
 	httpapi "github.com/mainflux/mainflux/things/api/things/http"
 	"github.com/stretchr/testify/assert"
@@ -30,8 +30,6 @@ const (
 	streamID      = "mainflux.bootstrap"
 	email         = "user@example.com"
 	validToken    = "validToken"
-	unknownID     = "1"
-	unknownKey    = "2"
 	channelsNum   = 3
 	defaultTimout = 5
 
@@ -64,7 +62,7 @@ var (
 )
 
 func newService(auth mainflux.AuthNServiceClient, url string) bootstrap.Service {
-	configs := mocks.NewConfigsRepository(map[string]string{unknownID: unknownKey})
+	configs := mocks.NewConfigsRepository()
 	config := mfsdk.Config{
 		BaseURL: url,
 	}
@@ -110,14 +108,14 @@ func TestAdd(t *testing.T) {
 	cases := []struct {
 		desc   string
 		config bootstrap.Config
-		key    string
+		token  string
 		err    error
 		event  map[string]interface{}
 	}{
 		{
 			desc:   "create config successfully",
 			config: config,
-			key:    validToken,
+			token:  validToken,
 			err:    nil,
 			event: map[string]interface{}{
 				"thing_id":    "1",
@@ -133,7 +131,7 @@ func TestAdd(t *testing.T) {
 		{
 			desc:   "create invalid config",
 			config: invalidConfig,
-			key:    validToken,
+			token:  validToken,
 			err:    bootstrap.ErrMalformedEntity,
 			event:  nil,
 		},
@@ -141,7 +139,7 @@ func TestAdd(t *testing.T) {
 
 	lastID := "0"
 	for _, tc := range cases {
-		_, err := svc.Add(tc.key, tc.config)
+		_, err := svc.Add(tc.token, tc.config)
 		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&redis.XReadArgs{
@@ -205,14 +203,14 @@ func TestUpdate(t *testing.T) {
 	cases := []struct {
 		desc   string
 		config bootstrap.Config
-		key    string
+		token  string
 		err    error
 		event  map[string]interface{}
 	}{
 		{
 			desc:   "update config successfully",
 			config: modified,
-			key:    validToken,
+			token:  validToken,
 			err:    nil,
 			event: map[string]interface{}{
 				"thing_id":  modified.MFThing,
@@ -225,7 +223,7 @@ func TestUpdate(t *testing.T) {
 		{
 			desc:   "update non-existing config",
 			config: nonExisting,
-			key:    validToken,
+			token:  validToken,
 			err:    bootstrap.ErrNotFound,
 			event:  nil,
 		},
@@ -233,7 +231,7 @@ func TestUpdate(t *testing.T) {
 
 	lastID := "0"
 	for _, tc := range cases {
-		err := svc.Update(tc.key, tc.config)
+		err := svc.Update(tc.token, tc.config)
 		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&redis.XReadArgs{
@@ -268,7 +266,7 @@ func TestUpdateConnections(t *testing.T) {
 	cases := []struct {
 		desc        string
 		id          string
-		key         string
+		token       string
 		connections []string
 		err         error
 		event       map[string]interface{}
@@ -276,7 +274,7 @@ func TestUpdateConnections(t *testing.T) {
 		{
 			desc:        "update connections successfully",
 			id:          saved.MFThing,
-			key:         validToken,
+			token:       validToken,
 			connections: []string{"2"},
 			err:         nil,
 			event: map[string]interface{}{
@@ -289,7 +287,7 @@ func TestUpdateConnections(t *testing.T) {
 		{
 			desc:        "update connections unsuccessfully",
 			id:          saved.MFThing,
-			key:         validToken,
+			token:       validToken,
 			connections: []string{"256"},
 			err:         bootstrap.ErrMalformedEntity,
 			event:       nil,
@@ -298,7 +296,7 @@ func TestUpdateConnections(t *testing.T) {
 
 	lastID := "0"
 	for _, tc := range cases {
-		err := svc.UpdateConnections(tc.key, tc.id, tc.connections)
+		err := svc.UpdateConnections(tc.token, tc.id, tc.connections)
 		assert.True(t, errors.Contains(err, tc.err), fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&redis.XReadArgs{
@@ -353,15 +351,15 @@ func TestRemove(t *testing.T) {
 	cases := []struct {
 		desc  string
 		id    string
-		key   string
+		token string
 		err   error
 		event map[string]interface{}
 	}{
 		{
-			desc: "remove config successfully",
-			id:   saved.MFThing,
-			key:  validToken,
-			err:  nil,
+			desc:  "remove config successfully",
+			id:    saved.MFThing,
+			token: validToken,
+			err:   nil,
 			event: map[string]interface{}{
 				"thing_id":  saved.MFThing,
 				"timestamp": time.Now().Unix(),
@@ -371,7 +369,7 @@ func TestRemove(t *testing.T) {
 		{
 			desc:  "remove config with invalid credentials",
 			id:    saved.MFThing,
-			key:   "",
+			token: "",
 			err:   bootstrap.ErrUnauthorizedAccess,
 			event: nil,
 		},
@@ -379,7 +377,7 @@ func TestRemove(t *testing.T) {
 
 	lastID := "0"
 	for _, tc := range cases {
-		err := svc.Remove(tc.key, tc.id)
+		err := svc.Remove(tc.token, tc.id)
 		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&redis.XReadArgs{
@@ -485,7 +483,7 @@ func TestChangeState(t *testing.T) {
 	cases := []struct {
 		desc  string
 		id    string
-		key   string
+		token string
 		state bootstrap.State
 		err   error
 		event map[string]interface{}
@@ -493,7 +491,7 @@ func TestChangeState(t *testing.T) {
 		{
 			desc:  "change state to active",
 			id:    saved.MFThing,
-			key:   validToken,
+			token: validToken,
 			state: bootstrap.Active,
 			err:   nil,
 			event: map[string]interface{}{
@@ -506,7 +504,7 @@ func TestChangeState(t *testing.T) {
 		{
 			desc:  "change state invalid credentials",
 			id:    saved.MFThing,
-			key:   "",
+			token: "",
 			state: bootstrap.Inactive,
 			err:   bootstrap.ErrUnauthorizedAccess,
 			event: nil,
@@ -515,7 +513,7 @@ func TestChangeState(t *testing.T) {
 
 	lastID := "0"
 	for _, tc := range cases {
-		err := svc.ChangeState(tc.key, tc.id, tc.state)
+		err := svc.ChangeState(tc.token, tc.id, tc.state)
 		assert.Equal(t, tc.err, err, fmt.Sprintf("%s: expected %s got %s\n", tc.desc, tc.err, err))
 
 		streams := redisClient.XRead(&redis.XReadArgs{

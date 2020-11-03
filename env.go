@@ -6,12 +6,7 @@ package mainflux
 import (
 	"os"
 
-	"github.com/nats-io/nats.go"
-)
-
-const (
-	// DefNatsURL default NATS message broker URL
-	DefNatsURL = nats.DefaultURL
+	"github.com/subosito/gotenv"
 )
 
 // Env reads specified environment variable. If no value has been found,
@@ -22,4 +17,10 @@ func Env(key, fallback string) string {
 	}
 
 	return fallback
+}
+
+// LoadEnvFile loads environment variables defined in an .env formatted file.
+func LoadEnvFile(envfilepath string) error {
+	err := gotenv.Load(envfilepath)
+	return err
 }

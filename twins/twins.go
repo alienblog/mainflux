@@ -27,13 +27,12 @@ type Definition struct {
 	Delta      int64       `json:"delta"`
 }
 
-// Twin represents a Mainflux thing digital twin. Each twin is owned by one thing, and
-// is assigned with the unique identifier.
+// Twin is a Mainflux data system representation. Each twin is owned
+// by a single user, and is assigned with the unique identifier.
 type Twin struct {
 	Owner       string
 	ID          string
 	Name        string
-	ThingID     string
 	Created     time.Time
 	Updated     time.Time
 	Revision    int
@@ -46,12 +45,11 @@ type PageMetadata struct {
 	Total  uint64
 	Offset uint64
 	Limit  uint64
-	Name   string
 }
 
-// TwinsPage contains page related metadata as well as a list of twins that
+// Page contains page related metadata as well as a list of twins that
 // belong to this page.
-type TwinsPage struct {
+type Page struct {
 	PageMetadata
 	Twins []Twin
 }
@@ -59,25 +57,40 @@ type TwinsPage struct {
 // TwinRepository specifies a twin persistence API.
 type TwinRepository interface {
 	// Save persists the twin
-	Save(context.Context, Twin) (string, error)
+	Save(ctx context.Context, twin Twin) (string, error)
 
 	// Update performs an update to the existing twin. A non-nil error is
 	// returned to indicate operation failure.
-	Update(context.Context, Twin) error
+	Update(ctx context.Context, twin Twin) error
 
 	// RetrieveByID retrieves the twin having the provided identifier.
-	RetrieveByID(ctx context.Context, id string) (Twin, error)
+	RetrieveByID(ctx context.Context, twinID string) (Twin, error)
 
 	// RetrieveByAttribute retrieves twin ids whose definition contains
 	// the attribute with given channel and subtopic
 	RetrieveByAttribute(ctx context.Context, channel, subtopic string) ([]string, error)
 
-	// RetrieveAll retrieves the subset of things owned by the specified user.
-	RetrieveAll(context.Context, string, uint64, uint64, string, Metadata) (TwinsPage, error)
-
-	// RetrieveByThing retrieves twin that represents specified thing
-	RetrieveByThing(context.Context, string) (Twin, error)
+	// RetrieveAll retrieves the subset of twins owned by the specified user.
+	RetrieveAll(ctx context.Context, owner string, offset, limit uint64, name string, metadata Metadata) (Page, error)
 
 	// Remove removes the twin having the provided identifier.
-	Remove(ctx context.Context, id string) error
+	Remove(ctx context.Context, twinID string) error
+}
+
+// TwinCache contains twin caching interface.
+type TwinCache interface {
+	// Save stores twin ID as element of channel-subtopic keyed set and vice versa.
+	Save(ctx context.Context, twin Twin) error
+
+	// SaveIDs stores twin IDs as elements of channel-subtopic keyed set and vice versa.
+	SaveIDs(ctx context.Context, channel, subtopic string, twinIDs []string) error
+
+	// Update updates update twin id and channel-subtopic attributes mapping
+	Update(ctx context.Context, twin Twin) error
+
+	// ID returns twin IDs for given attribute.
+	IDs(ctx context.Context, channel, subtopic string) ([]string, error)
+
+	// Removes twin from cache based on twin id.
+	Remove(ctx context.Context, twinID string) error
 }

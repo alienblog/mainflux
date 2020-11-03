@@ -34,7 +34,7 @@ func addEndpoint(svc bootstrap.Service) endpoint.Endpoint {
 			Content:     req.Content,
 		}
 
-		saved, err := svc.Add(req.key, config)
+		saved, err := svc.Add(req.token, config)
 		if err != nil {
 			return nil, err
 		}
@@ -162,49 +162,37 @@ func listEndpoint(svc bootstrap.Service) endpoint.Endpoint {
 		if err != nil {
 			return nil, err
 		}
-		switch {
-		case req.filter.Unknown:
-			res := listUnknownRes{}
-			for _, cfg := range page.Configs {
-				res.Configs = append(res.Configs, unknownRes{
-					ExternalID:  cfg.ExternalID,
-					ExternalKey: cfg.ExternalKey,
+		res := listRes{
+			Total:   page.Total,
+			Offset:  page.Offset,
+			Limit:   page.Limit,
+			Configs: []viewRes{},
+		}
+
+		for _, cfg := range page.Configs {
+			var channels []channelRes
+			for _, ch := range cfg.MFChannels {
+				channels = append(channels, channelRes{
+					ID:       ch.ID,
+					Name:     ch.Name,
+					Metadata: ch.Metadata,
 				})
 			}
-			return res, nil
-		default:
-			res := listRes{
-				Total:   page.Total,
-				Offset:  page.Offset,
-				Limit:   page.Limit,
-				Configs: []viewRes{},
+
+			view := viewRes{
+				MFThing:     cfg.MFThing,
+				MFKey:       cfg.MFKey,
+				Channels:    channels,
+				ExternalID:  cfg.ExternalID,
+				ExternalKey: cfg.ExternalKey,
+				Name:        cfg.Name,
+				Content:     cfg.Content,
+				State:       cfg.State,
 			}
-
-			for _, cfg := range page.Configs {
-				var channels []channelRes
-				for _, ch := range cfg.MFChannels {
-					channels = append(channels, channelRes{
-						ID:       ch.ID,
-						Name:     ch.Name,
-						Metadata: ch.Metadata,
-					})
-				}
-
-				view := viewRes{
-					MFThing:     cfg.MFThing,
-					MFKey:       cfg.MFKey,
-					Channels:    channels,
-					ExternalID:  cfg.ExternalID,
-					ExternalKey: cfg.ExternalKey,
-					Name:        cfg.Name,
-					Content:     cfg.Content,
-					State:       cfg.State,
-				}
-				res.Configs = append(res.Configs, view)
-			}
-
-			return res, nil
+			res.Configs = append(res.Configs, view)
 		}
+
+		return res, nil
 	}
 }
 

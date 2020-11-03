@@ -4,13 +4,14 @@
 package grpc
 
 import (
+	"context"
+
 	kitot "github.com/go-kit/kit/tracing/opentracing"
 	kitgrpc "github.com/go-kit/kit/transport/grpc"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/mainflux/mainflux"
 	"github.com/mainflux/mainflux/things"
 	opentracing "github.com/opentracing/opentracing-go"
-	"golang.org/x/net/context"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -104,6 +105,10 @@ func encodeError(err error) error {
 		return status.Error(codes.InvalidArgument, "received invalid can access request")
 	case things.ErrUnauthorizedAccess:
 		return status.Error(codes.PermissionDenied, "missing or invalid credentials provided")
+	case things.ErrEntityConnected:
+		return status.Error(codes.PermissionDenied, "entities are not connected")
+	case things.ErrNotFound:
+		return status.Error(codes.NotFound, "entity does not exist")
 	default:
 		return status.Error(codes.Internal, "internal server error")
 	}

@@ -7,8 +7,10 @@ import (
 	"github.com/mainflux/mainflux/twins"
 )
 
-const maxNameSize = 1024
-const maxLimitSize = 100
+const (
+	maxNameSize  = 1024
+	maxLimitSize = 100
+)
 
 type apiReq interface {
 	validate() error
@@ -37,7 +39,6 @@ type updateTwinReq struct {
 	token      string
 	id         string
 	Name       string                 `json:"name,omitempty"`
-	ThingID    string                 `json:"thing_id,omitempty"`
 	Definition twins.Definition       `json:"definition,omitempty"`
 	Metadata   map[string]interface{} `json:"metadata,omitempty"`
 }

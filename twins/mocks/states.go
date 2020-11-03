@@ -5,7 +5,6 @@ package mocks
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -16,9 +15,8 @@ import (
 var _ twins.StateRepository = (*stateRepositoryMock)(nil)
 
 type stateRepositoryMock struct {
-	mu      sync.Mutex
-	counter uint64
-	states  map[string]twins.State
+	mu     sync.Mutex
+	states map[string]twins.State
 }
 
 // NewStateRepository creates in-memory twin repository.
@@ -53,28 +51,25 @@ func (srm *stateRepositoryMock) Count(ctx context.Context, tw twins.Twin) (int64
 	return int64(len(srm.states)), nil
 }
 
-func (srm *stateRepositoryMock) RetrieveAll(ctx context.Context, offset uint64, limit uint64, id string) (twins.StatesPage, error) {
+func (srm *stateRepositoryMock) RetrieveAll(ctx context.Context, offset uint64, limit uint64, twinID string) (twins.StatesPage, error) {
 	srm.mu.Lock()
 	defer srm.mu.Unlock()
-
-	items := make([]twins.State, 0)
 
 	if limit <= 0 {
 		return twins.StatesPage{}, nil
 	}
 
-	// This obscure way to examine map keys is enforced by the key structure in mocks/commons.go
-	prefix := fmt.Sprintf("%s-", id)
+	var items []twins.State
 	for k, v := range srm.states {
-		if !strings.HasPrefix(k, prefix) {
+		if (uint64)(len(items)) >= limit {
+			break
+		}
+		if !strings.HasPrefix(k, twinID) {
 			continue
 		}
 		id := uint64(v.ID)
-		if id > offset && id < limit {
+		if id >= offset && id < offset+limit {
 			items = append(items, v)
-		}
-		if (uint64)(len(items)) >= limit {
-			break
 		}
 	}
 
@@ -85,7 +80,7 @@ func (srm *stateRepositoryMock) RetrieveAll(ctx context.Context, offset uint64, 
 	page := twins.StatesPage{
 		States: items,
 		PageMetadata: twins.PageMetadata{
-			Total:  srm.counter,
+			Total:  srm.total(twinID),
 			Offset: offset,
 			Limit:  limit,
 		},
@@ -94,18 +89,33 @@ func (srm *stateRepositoryMock) RetrieveAll(ctx context.Context, offset uint64, 
 	return page, nil
 }
 
+func (srm *stateRepositoryMock) total(twinID string) uint64 {
+	var total uint64
+	for k := range srm.states {
+		if strings.HasPrefix(k, twinID) {
+			total++
+		}
+	}
+	return total
+}
+
 // RetrieveLast returns the last state related to twin spec by id
-func (srm *stateRepositoryMock) RetrieveLast(ctx context.Context, id string) (twins.State, error) {
+func (srm *stateRepositoryMock) RetrieveLast(ctx context.Context, twinID string) (twins.State, error) {
 	srm.mu.Lock()
 	defer srm.mu.Unlock()
 
 	items := make([]twins.State, 0)
 	for _, v := range srm.states {
-		items = append(items, v)
+		if v.TwinID == twinID {
+			items = append(items, v)
+		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		return items[i].ID < items[j].ID
 	})
 
-	return items[len(items)-1], nil
+	if len(items) > 0 {
+		return items[len(items)-1], nil
+	}
+	return twins.State{}, nil
 }

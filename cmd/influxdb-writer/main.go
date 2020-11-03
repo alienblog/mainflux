@@ -14,9 +14,9 @@ import (
 	kitprometheus "github.com/go-kit/kit/metrics/prometheus"
 	influxdata "github.com/influxdata/influxdb/client/v2"
 	"github.com/mainflux/mainflux"
-	"github.com/mainflux/mainflux/broker"
 	"github.com/mainflux/mainflux/logger"
-	"github.com/mainflux/mainflux/transformers/senml"
+	"github.com/mainflux/mainflux/pkg/messaging/nats"
+	"github.com/mainflux/mainflux/pkg/transformers/senml"
 	"github.com/mainflux/mainflux/writers"
 	"github.com/mainflux/mainflux/writers/api"
 	"github.com/mainflux/mainflux/writers/influxdb"
@@ -26,25 +26,27 @@ import (
 const (
 	svcName = "influxdb-writer"
 
-	defNatsURL         = mainflux.DefNatsURL
+	defNatsURL         = "nats://localhost:4222"
 	defLogLevel        = "error"
 	defPort            = "8180"
-	defDBName          = "mainflux"
+	defDB              = "mainflux"
 	defDBHost          = "localhost"
 	defDBPort          = "8086"
 	defDBUser          = "mainflux"
 	defDBPass          = "mainflux"
 	defSubjectsCfgPath = "/config/subjects.toml"
+	defContentType     = "application/senml+json"
 
 	envNatsURL         = "MF_NATS_URL"
 	envLogLevel        = "MF_INFLUX_WRITER_LOG_LEVEL"
 	envPort            = "MF_INFLUX_WRITER_PORT"
-	envDBName          = "MF_INFLUX_WRITER_DB_NAME"
+	envDB              = "MF_INFLUX_WRITER_DB"
 	envDBHost          = "MF_INFLUX_WRITER_DB_HOST"
 	envDBPort          = "MF_INFLUX_WRITER_DB_PORT"
 	envDBUser          = "MF_INFLUX_WRITER_DB_USER"
 	envDBPass          = "MF_INFLUX_WRITER_DB_PASS"
 	envSubjectsCfgPath = "MF_INFLUX_WRITER_SUBJECTS_CONFIG"
+	envContentType     = "MF_INFLUX_WRITER_CONTENT_TYPE"
 )
 
 type config struct {
@@ -57,6 +59,7 @@ type config struct {
 	dbUser          string
 	dbPass          string
 	subjectsCfgPath string
+	contentType     string
 }
 
 func main() {
@@ -67,12 +70,12 @@ func main() {
 		log.Fatalf(err.Error())
 	}
 
-	b, err := broker.New(cfg.natsURL)
+	pubSub, err := nats.NewPubSub(cfg.natsURL, "", logger)
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error(fmt.Sprintf("Failed to connect to NATS: %s", err))
 		os.Exit(1)
 	}
-	defer b.Close()
+	defer pubSub.Close()
 
 	client, err := influxdata.NewHTTPClient(clientCfg)
 	if err != nil {
@@ -86,8 +89,9 @@ func main() {
 	counter, latency := makeMetrics()
 	repo = api.LoggingMiddleware(repo, logger)
 	repo = api.MetricsMiddleware(repo, counter, latency)
-	st := senml.New()
-	if err := writers.Start(b, repo, st, svcName, cfg.subjectsCfgPath, logger); err != nil {
+	st := senml.New(cfg.contentType)
+
+	if err := writers.Start(pubSub, repo, st, svcName, cfg.subjectsCfgPath, logger); err != nil {
 		logger.Error(fmt.Sprintf("Failed to start InfluxDB writer: %s", err))
 		os.Exit(1)
 	}
@@ -110,12 +114,13 @@ func loadConfigs() (config, influxdata.HTTPConfig) {
 		natsURL:         mainflux.Env(envNatsURL, defNatsURL),
 		logLevel:        mainflux.Env(envLogLevel, defLogLevel),
 		port:            mainflux.Env(envPort, defPort),
-		dbName:          mainflux.Env(envDBName, defDBName),
+		dbName:          mainflux.Env(envDB, defDB),
 		dbHost:          mainflux.Env(envDBHost, defDBHost),
 		dbPort:          mainflux.Env(envDBPort, defDBPort),
 		dbUser:          mainflux.Env(envDBUser, defDBUser),
 		dbPass:          mainflux.Env(envDBPass, defDBPass),
 		subjectsCfgPath: mainflux.Env(envSubjectsCfgPath, defSubjectsCfgPath),
+		contentType:     mainflux.Env(envContentType, defContentType),
 	}
 
 	clientCfg := influxdata.HTTPConfig{
